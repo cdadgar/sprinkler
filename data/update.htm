@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+<script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
+<script>
+var totalSize;
+$(document).ready(function(){
+  //binds to onchange event of your input field
+  $('#choose').bind('change', function() {
+    totalSize = this.files[0].size;
+    console.log('set totalSize', totalSize);
+  });
+
+  $('#update').button().click(function(event) {
+    console.log('totalSize', totalSize);
+  });
+
+  $('#cancel').button().click(function(event) {
+    window.location.href='setup.htm';
+  });
+});
+</script>
+</head>
+<body>
+  <form method='POST' action='/update' enctype='multipart/form-data'>
+    <input type='file' name='update' id='choose'>
+    <button id='update' type='submit'>Update</button>
+  </form>
+  <br>
+  <button id='cancel'>Cancel</button>
+</body>
+</html>

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="icon" type="image/x-icon" href="favicon.ico"/>
+<link rel='stylesheet' href='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/smoothness/jquery-ui.css'>
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+<script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
+<script src='common.js'></script>
+<script>
+var zone;
+var numZones;
+var socket;
+
+$(document).ready(function(){
+  initWebsocket('zone');
+});
+
+function message(msg){
+  console.log('onmessage ' + msg.data);
+  var obj = JSON.parse(msg.data);
+  zone = obj.value;
+  numZones = zone.length;
+
+  initGui();
+  loadZone();
+}
+
+function initGui(){
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    document.body.style.zoom = '240%';
+  else
+    document.body.style.zoom = '120%';
+
+  // create the zone name textfields and rain sensor and pump checkboxes
+  var zones = $('#zones');
+  var str = 'Name/Uses Rain Sensor/Uses Pump/Turn On<br>';
+  for (var i=0; i < numZones; ++i) {
+    str += "<label style='width: 65px; display: inline-block;' for='name"+i+"'>Zone "+(i+1)+": </label>&nbsp;";
+
+    str += "<input name='name"+i+"' id='name"+i+"'></input>";
+    str += "<input type='checkbox' name='sensor"+i+"' id='sensor"+i+"'></input>";
+    str += "<input type='checkbox' name='pump"+i+"' id='pump"+i+"'></input>";
+    str += "&nbsp;&nbsp;&nbsp;<input type='checkbox' name='on"+i+"' id='"+i+"'></input>";
+    str += '<br>';
+  }
+  zones.append(str);
+
+  $("input[name^='on']").click(function(event) {
+    var $this = $(this);
+    var id = this.id;
+    var isOn = ($this.is(':checked'));
+    var json = {
+      command: (isOn) ? 'OnZone': 'OffZone',
+      value: id
+    };
+    socket.send(JSON.stringify(json));
+  });
+
+  $('#save').button().click(function(event) {
+    doSave();
+    close();
+  });
+
+  $('#cancel').button().click(function(event) {
+    close();
+  });
+}
+
+function close() {
+  window.location.href='index.htm';
+}
+
+function doSave() {
+  saveZone();
+  var json = {
+    command: 'saveZone',
+    value: zone
+  };
+  socket.send(JSON.stringify(json));
+}
+
+function saveZone() {
+  for (var i=0; i < numZones; ++i) {
+    zone[i][0] = $('#name'+i).val();
+    zone[i][1] = $('#sensor'+i).is(':checked') ? 1 : 0;
+    zone[i][2] = $('#pump'+i).is(':checked') ? 1 : 0;
+  }
+}
+
+function loadZone() {
+  for (var i=0; i < numZones; ++i) {
+    $('#name'+i).val(zone[i][0]);
+    $('#sensor'+i).prop('checked', zone[i][1]==1);
+    $('#pump'+i).prop('checked', zone[i][2]==1);
+  }
+}
+</script>
+</head>
+<body>
+<div id='message' style='zoom:200%;'></div>
+<div id='controls'>
+  <div id='zones'></div><br>
+  <button id='save'>Save</button>
+  <button id='cancel'>Cancel</button>
+</div>
+</body>
+</html>

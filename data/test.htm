@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html>
+<head>
+<link rel="icon" type="image/x-icon" href="favicon.ico"/>
+<link rel='stylesheet' href='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/themes/smoothness/jquery-ui.css'>
+<script src='https://ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js'></script>
+<script src='https://ajax.googleapis.com/ajax/libs/jqueryui/1.11.4/jquery-ui.min.js'></script>
+<script src='common.js'></script>
+<script>
+var socket;
+
+$(document).ready(function(){
+  initGui();
+  initWebsocket('test');
+});
+
+function message(msg){
+  console.log('onmessage ' + msg.data);
+  var obj = JSON.parse(msg.data);
+  if (obj.msg != undefined) {
+    $('#msg').html(obj.msg);
+    $('#addr').val(obj.addr);
+  }
+  else {
+    $('#val').html(obj.value + "&nbsp;&nbsp;&nbsp;" + parseInt(obj.value).toString(2));
+	$('#heap').html(obj.heap);
+  }
+}
+
+function initGui(){
+  if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
+    document.body.style.zoom = '260%';
+  else
+    document.body.style.zoom = '120%';
+
+  $('#send').button().click(function(event) {
+    var json = {
+      command: 'send',
+      addr: $('#addr').val(), 
+      value: $('#value').val() 
+    };
+    console.log(JSON.stringify(json));
+    socket.send(JSON.stringify(json));
+  });
+
+  $('#cancel').button().click(function(event) {
+    window.location.href='index.htm';
+  });
+}
+</script>
+</head>
+<body>
+<div id='message' style='zoom:200%;'></div>
+<div id='controls'>
+  <span id='msg' class='ui-widget'></span><br>
+  <label for='addr'>Addr:</label>&nbsp;
+  <input name='addr' id='addr'>
+  <br>
+  <label for='value'>Value:</label>&nbsp;
+  <input name='value' id='value'>
+  <br>
+  <span id='val' class='ui-widget'></span><br>
+  <br>
+  <label for='heap'>Free Heap:</label>&nbsp;
+  <span id='heap' class='ui-widget'></span><br>
+  <button id='send'>Send</button>
+  <button id='cancel'>Cancel</button>
+</div>
+</body>
+</html>
