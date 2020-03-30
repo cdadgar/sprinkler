@@ -1,6 +1,6 @@
 /*
- * module is a esp-1
- * flash size set to 1M (128K SPIFFS)
+ * module is a esp-1  (Generic ESP8266 Module)
+ * flash size set to 1MB (FS:128KB OTA:~438KB)
  * 
  * to program, slide switch to point nearest the button, then press the button
  * (the port montor should show some giberish.  it if shows normal debug output, the esp is running, and not in programing mode.
@@ -52,25 +52,51 @@ what does the boot mode refer to?  are the pins being pulled up/down correctly? 
  */
 
 /*
- * LiquidCrystal_I2C - https://github.com/fdebrabander/Arduino-LiquidCrystal-I2C-library (git)
+ * todo:
+ *  - add ota
+ *  - add mqtt
+ */
 
+/*
+ * library sources:
+ * ESP8266WiFi, ESP8266WebServer, FS, DNSServer, Hash, EEPROM, ArduinoOTA - https://github.com/esp8266/Arduino
+ * WebSocketsServer - https://github.com/Links2004/arduinoWebSockets (git)
+ * WiFiManager - https://github.com/tzapu/WiFiManager (git)
+ * ESPAsyncTCP - https://github.com/me-no-dev/ESPAsyncTCP (git)
+ * ESPAsyncUDP - https://github.com/me-no-dev/ESPAsyncUDP (git)
+ * PubSub - https://github.com/knolleary/pubsubclient (git)
+ * TimeLib - https://github.com/PaulStoffregen/Time (git)
+ * Timezone - https://github.com/JChristensen/Timezone (git)
+ * ArduinoJson - https://github.com/bblanchon/ArduinoJson  (git)
+ * LiquidCrystal_I2C - https://github.com/fdebrabander/Arduino-LiquidCrystal-I2C-library (git)
+ */
+ 
 #include <ESP8266WiFi.h>
 #include <WebSocketsServer.h>
 #include <Hash.h>
 #include <TimeLib.h> 
-//#include <Timezone.h>
-#include <Wire.h>
+#include <Timezone.h>
+
+//US Eastern Time Zone (New York, Detroit)
+TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};    //Daylight time = UTC - 4 hours
+TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};     //Standard time = UTC - 5 hours
+Timezone myTZ(myDST, mySTD);
+
+// --------------------------------------------
+
+// web server library includes
+#include <ESP8266WebServer.h>
 #include <ArduinoJson.h>
 #include <EEPROM.h>
 
 // --------------------------------------------
 
-#include <ESP8266WebServer.h>
+// file system (spiffs) library includes
 #include <FS.h>
 
 // --------------------------------------------
 
-// wifi manager includes
+// wifi manager library includes
 #include <DNSServer.h>
 #include <WiFiManager.h>
 
@@ -84,6 +110,10 @@ what does the boot mode refer to?  are the pins being pulled up/down correctly? 
 
 // display includes
 #include <LiquidCrystal_I2C.h>
+
+// --------------------------------------------
+
+#include <Wire.h>
 
 // --------------------------------------------
 
@@ -655,15 +685,11 @@ void setupTime(void) {
       secsSince1900 |= (unsigned long)buf[43];
       time_t utc = secsSince1900 - 2208988800UL;
     
-    // cpd..hack until timezone is fixed
-      utc -= 60 * 60 * 4;
-      setTime(utc);
+      TimeChangeRule *tcr;
+      time_t local = myTZ.toLocal(utc, &tcr);
+      Serial.printf("\ntime zone %s\n", tcr->abbrev);
     
-//      TimeChangeRule *tcr;
-//      time_t local = myTZ.toLocal(utc, &tcr);
-//      Serial.printf("\ntime zone %s\n", tcr->abbrev);
-//    
-//      setTime(local);
+      setTime(local);
     
       // just print out the time
       printTime(false, false, true);
@@ -705,7 +731,7 @@ void setupTime(void) {
 
 void setupDisplay(void) {
   // initialize the lcd 
-  lcd.init();
+  lcd.begin();
   lcd.clear();
 
   displayBacklight(true);
