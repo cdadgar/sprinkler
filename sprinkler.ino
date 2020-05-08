@@ -100,11 +100,29 @@ Timezone myTZ(myDST, mySTD);
 #include <DNSServer.h>
 #include <WiFiManager.h>
 
+WiFiManager wifiManager;
+String ssid;
+
 // --------------------------------------------
 
 // aync library includes
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncUDP.h>
+
+// --------------------------------------------
+
+// mqtt library includes
+#include <PubSubClient.h>
+
+// --------------------------------------------
+
+// arduino ota library includes
+#include <ArduinoOTA.h>
+
+#include <WiFiClient.h>
+#include <ESP8266mDNS.h>
+#include <ESP8266HTTPUpdateServer.h>
+ESP8266HTTPUpdateServer httpUpdater;
 
 // --------------------------------------------
 
@@ -116,6 +134,11 @@ Timezone myTZ(myDST, mySTD);
 #include <Wire.h>
 
 // --------------------------------------------
+
+const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+
+// --------------------------------------------
+
 
 #define WU_API_KEY  "76d6efe987659cd1" // sprinkler key
 #define WU_LOCATION "34241"
@@ -267,15 +290,6 @@ const long debounceDelay = 50;    // the debounce time
 
 // --------------------------------------------
 
-//US Eastern Time Zone (New York, Detroit)
-//TimeChangeRule myDST = {"EDT", Second, Sun, Mar, 2, -240};    //Daylight time = UTC - 4 hours
-//TimeChangeRule mySTD = {"EST", First, Sun, Nov, 2, -300};     //Standard time = UTC - 5 hours
-//Timezone myTZ(myDST, mySTD);
-
-const char *weekdayNames[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
-
-// --------------------------------------------
-
 #define MenuIdleTime                 10000
 
 LiquidCrystal_I2C lcd(0x27,16,2);
@@ -345,7 +359,6 @@ bool isName;
 
 ESP8266WebServer server(80);
 File fsUploadFile;
-bool isUploading;
 
 WebSocketsServer webSocket = WebSocketsServer(81);
 int webClient = -1;
@@ -360,11 +373,22 @@ unsigned int testHeap = 0;
 
 bool isTimeSet = false;
 
+WiFiClient espClient;
+PubSubClient client(espClient);
+
+#define HOST_NAME "SPRINKLER"
+#define MQTT_IP_ADDR "192.168.1.210"
+#define MQTT_IP_PORT 1883
+
 bool isPromModified;
 bool isMemoryReset = false;
 //bool isMemoryReset = true;
 
 typedef struct {
+  char host_name[17];
+  char mqtt_ip_addr[17];
+  int mqtt_ip_port;
+  byte use_mqtt;
   byte mode;
   byte display_timeout;
   byte water_adjust;
@@ -448,7 +472,6 @@ void startTorrents(String id);
 void stopTorrents(String id);
 
 
-
 void setup() {
   // start serial port
   Serial.begin(115200);
@@ -487,6 +510,8 @@ void setup() {
 
   setupTime();
   setupWebServer();  
+  setupMqtt();
+  setupOta();
 
   webSocket.begin();
   webSocket.onEvent(webSocketEvent);
@@ -503,12 +528,11 @@ void setup() {
   remainingZoneMinutes = 0;
   remainingZoneSeconds = 0;
   isName = false;
-  
-  isUploading = false;
 
   isSetup = true;
   drawMainScreen();
 }
+
 
 void initZone(void) {
 /*
@@ -555,6 +579,7 @@ all zones use the rain sensor except for the pool drip
 
   saveZoneConfig(); 
 }
+
 
 void initProgram(void) {
 /*
@@ -614,7 +639,14 @@ number of minutes for each zone (1..12)
   saveProgramConfig(); 
 }
 
-#define AP_NAME "Sprinkler"
+
+void printName() {
+  if (webClient == -1)
+    return;
+    
+  sendWeb("name", config.host_name);
+}
+
 
 void configModeCallback(WiFiManager *myWiFiManager) {
   // this callback gets called when the enter AP mode, and the users
@@ -622,22 +654,22 @@ void configModeCallback(WiFiManager *myWiFiManager) {
   lcd.clear();
   lcd.setCursor(0,0);
   lcd.print(F("Join:"));
-  lcd.print(AP_NAME);
+  lcd.print(config.host_name);
   lcd.setCursor(0,1);
   lcd.print(F("Goto:"));
   lcd.print(WiFi.softAPIP());
 }
 
+
 bool setupWifi(void) {
-  WiFi.hostname("sprinkler");
+  WiFi.hostname(config.host_name);
   
-  WiFiManager wifiManager;
 //  wifiManager.setDebugOutput(false);
   
   //reset settings - for testing
   //wifiManager.resetSettings();
 
-  String ssid = WiFi.SSID();
+  ssid = WiFi.SSID();
   if (ssid.length() > 0) {
     Serial.print(F("Connecting to "));
     Serial.println(ssid);
@@ -650,7 +682,7 @@ bool setupWifi(void) {
   //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
   wifiManager.setAPCallback(configModeCallback);
 
-  if(!wifiManager.autoConnect(AP_NAME)) {
+  if(!wifiManager.autoConnect(config.host_name)) {
     Serial.println(F("failed to connect and hit timeout"));
     //reset and try again, or maybe put it to deep sleep
     ESP.reset();
@@ -737,6 +769,7 @@ void setupDisplay(void) {
   displayBacklight(true);
 }
 
+
 void setupButtons(void) {
   numButtons = sizeof(buttonPins)/sizeof(buttonPins[0]);
   buttonStates = new int[numButtons];
@@ -750,6 +783,7 @@ void setupButtons(void) {
   }
 }
 
+
 void drawMainScreen(void) {
   screen = MAIN;
 
@@ -760,6 +794,7 @@ void drawMainScreen(void) {
   printModeState(true);
   printRainState(true);
 }
+
 
 void printRainState(bool isDisplay) {
   char msg[12];
@@ -786,6 +821,7 @@ void printRainState(bool isDisplay) {
   }
 }
 
+
 void printModeState(bool isDisplay) {
   const char *msg;
   if (isManual)
@@ -810,13 +846,9 @@ void printModeState(bool isDisplay) {
   }
 }
 
+
 void loop(void)
 {
-  if (isUploading) {
-    server.handleClient();
-    return;
-  }
-  
   if (!isSetup)
     return;
    
@@ -848,11 +880,24 @@ void loop(void)
 
   webSocket.loop();
   server.handleClient();
+  MDNS.update();
+  
+  // mqtt
+  if (config.use_mqtt) {
+    if (!client.connected()) {
+      reconnect();
+    }
+    client.loop();
+  }
+
+  ArduinoOTA.handle();
 }
+
 
 #define TimeBetweenFlashes 500
 unsigned long lastFlashTime = 0;
 bool isFlash = false;
+
 
 void flashTime(unsigned long time) {
   // the temperature sensor blocks the app from running while it is reading.
@@ -867,6 +912,7 @@ void flashTime(unsigned long time) {
   }
 }
 
+
 void checkTimeSeconds(void) {
   int seconds = second();
   if (seconds == lastSeconds)
@@ -876,6 +922,7 @@ void checkTimeSeconds(void) {
   checkRemainingWatering();
   printWatering(true);
 }
+
 
 void checkTimeMinutes() {
   int minutes = minute();
@@ -920,6 +967,7 @@ void checkTimeMinutes() {
   }
 }
 
+
 void rainChange(void) {
   if (isRain) {
     // just startd raining
@@ -934,6 +982,7 @@ void rainChange(void) {
   }
 }
 
+
 void checkRemainingWatering(void) {
   // called every second
   if (runningProgram == -1)
@@ -946,6 +995,7 @@ void checkRemainingWatering(void) {
       startNextZone();
   }
 }
+
 
 int getRainSensor(void) {
   if (strcmp(config.chip_type,"P") == 0)
@@ -960,6 +1010,7 @@ int getRainSensor(void) {
   int reading = ((value & rainSensorMask) == 0) ? LOW : HIGH;
   return reading;
 }
+
 
 void checkButtons(void) {
   if (testClient != -1 && testAddr != -1) {
@@ -1021,6 +1072,7 @@ void checkButtons(void) {
   }
 }
 
+
 void doButton(int pin) {
   lastButtonPressTime = millis();
   
@@ -1043,6 +1095,7 @@ void doButton(int pin) {
   }
 }
 
+
 void doUp(void) {
   switch(screen) {
     case MAIN:
@@ -1054,6 +1107,7 @@ void doUp(void) {
       break;
   }
 }
+
 
 void doDown(void) {
   switch(screen) {
@@ -1067,6 +1121,7 @@ void doDown(void) {
   }
 }
 
+
 void doEnter(void) {
   switch(screen) {
     case MAIN:
@@ -1078,6 +1133,7 @@ void doEnter(void) {
       break;
   }
 }
+
 
 void modeChange(bool isLocal) {
   saveConfig();
@@ -1097,17 +1153,20 @@ void modeChange(bool isLocal) {
     logAction(PROGRAMS_RUN);
 }
 
+
 void sendWeb(const char *command, const char *value) {
   char json[128];
   sprintf(json, "{\"command\":\"%s\",\"value\":\"%s\"}", command, value);
   webSocket.sendTXT(webClient, json, strlen(json));
 }
 
+
 void startManual(void) {
   isManual = true;
   startProgram(0);
   drawMainScreen();
 }
+
 
 void doMenuEnter(void) {
   switch(selectedMenuItem) {
@@ -1122,9 +1181,11 @@ void doMenuEnter(void) {
   }
 }
 
+
 int row[] = { 0, 0, 1, 1 };
 int col[] = { 0, 15, 0, 15 };
 byte chr[] = { 126, 127, 126, 127 };  // right and left arrows
+
 
 void setSelectedMenuItem(int item) {
   if (selectedMenuItem != NONE) {
@@ -1141,6 +1202,7 @@ void setSelectedMenuItem(int item) {
   lcd.write(chr[selectedMenuItem]);
 }
 
+
 void drawMenuScreen(void) {
   screen = MENU;
   selectedMenuItem = NONE;
@@ -1156,6 +1218,7 @@ void drawMenuScreen(void) {
   lcd.print(WiFi.localIP());
 }
 
+
 void send(byte addr, byte b) {
   if (strcmp(config.chip_type,"P") == 0)
     Wire.beginTransmission(addr);
@@ -1165,6 +1228,7 @@ void send(byte addr, byte b) {
   Wire.endTransmission(); 
 }
 
+
 void displayBacklight(bool isOn) {
   isDisplayOn = isOn;
   if (isOn)
@@ -1172,6 +1236,7 @@ void displayBacklight(bool isOn) {
   else
     lcd.noBacklight();
 }
+
 
 void clearWatering(void) {
   lcd.setCursor(0,1);
@@ -1183,6 +1248,7 @@ void clearWatering(void) {
     sendWeb("water_adjust", "");
   }
 }
+
 
 void printWatering(bool isDisplay) {
   if (runningProgram == -1)
@@ -1223,12 +1289,14 @@ void printWatering(bool isDisplay) {
   }
 }
 
+
 void eraseTime(void) {
   lcd.setCursor(13,0);
   lcd.print(F("   "));
   lcd.setCursor(10,1);
   lcd.print(F("      "));
 }
+
 
 void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
   int dayOfWeek = weekday()-1;
@@ -1273,6 +1341,7 @@ void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
   }
 }
 
+
 void pump(boolean isOn) {
   isPumpOn = isOn;
   byte data = 0xFF;
@@ -1282,6 +1351,7 @@ void pump(boolean isOn) {
   Serial.printf("pump, sending addr %d, value ", pumpAddr);
   Serial.println(data, BIN);
 }
+
 
 boolean programNeedsZimmerman(int index) {
   // if the running program contains a zone that uses the rain sensor,
@@ -1297,7 +1367,9 @@ boolean programNeedsZimmerman(int index) {
   return false;
 }
 
+
 int programToStart;
+
 
 void startProgram(int index) {
   programToStart = index;
@@ -1336,6 +1408,7 @@ void stopProgram(void) {
   isManual = false;
   printModeState(true);
 }
+
 
 void startCurrentZone(void) {
   if (runningProgram != -1) {
@@ -1395,6 +1468,7 @@ void startCurrentZone(void) {
   }
 }
 
+
 void stopCurrentZone(void) {
   // turn off the current zone
   if ( runningZone != -1 ) {
@@ -1408,6 +1482,7 @@ void stopCurrentZone(void) {
     isName = false;
   }
 }
+
 
 void startNextZone(void) {
   stopCurrentZone();
@@ -1455,6 +1530,7 @@ void startNextZone(void) {
   startCurrentZone();
 }
 
+
 void startPreviousZone(void) {
   stopCurrentZone();
 
@@ -1501,6 +1577,7 @@ void startPreviousZone(void) {
   startCurrentZone();
 }
 
+
 void checkProgram(int day, int h, int m) {
   if (config.mode == OFF)
     return;
@@ -1531,6 +1608,7 @@ void checkProgram(int day, int h, int m) {
   // no programs were matches
 }
 
+
 #define MAGIC_NUM   0xAD
 
 #define MAGIC_NUM_ADDRESS      0
@@ -1538,10 +1616,12 @@ void checkProgram(int day, int h, int m) {
 #define PROGRAM_ADDRESS        CONFIG_ADDRESS + sizeof(config)
 #define ZONE_ADDRESS           PROGRAM_ADDRESS + sizeof(program)
 
+
 void set(char *name, const char *value) {
   for (int i=strlen(value); i >= 0; --i)
     *(name++) = *(value++);
 }
+
 
 void loadConfig(void) {
   int magicNum = EEPROM.read(MAGIC_NUM_ADDRESS);
@@ -1553,6 +1633,10 @@ void loadConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
     Serial.println(F("using default config"));
+    set(config.host_name, HOST_NAME);
+    set(config.mqtt_ip_addr, MQTT_IP_ADDR);
+    config.mqtt_ip_port = MQTT_IP_PORT;
+    config.use_mqtt = 0;
     config.mode = OFF;
     config.display_timeout = 20;
     config.water_adjust = 100;
@@ -1579,6 +1663,10 @@ void loadConfig(void) {
       *ptr = EEPROM.read(addr++);
   }
 
+  Serial.printf("host_name %s\n", config.host_name);
+  Serial.printf("use_mqtt %d\n", config.use_mqtt);
+  Serial.printf("mqqt_ip_addr %s\n", config.mqtt_ip_addr);
+  Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
   Serial.printf("mode %d\n", config.mode);
   Serial.printf("display_timeout %d\n", config.display_timeout);
   Serial.printf("water_adjust %d\n", config.water_adjust);
@@ -1597,6 +1685,7 @@ void loadConfig(void) {
   Serial.printf("chip_type %s\n", config.chip_type);
 }
 
+
 void loadProgramConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
@@ -1611,6 +1700,7 @@ void loadProgramConfig(void) {
       *ptr = EEPROM.read(addr);
   }
 }
+
 
 void loadZoneConfig(void) {
   if (isMemoryReset) {
@@ -1630,6 +1720,7 @@ void loadZoneConfig(void) {
 //      zone[i].usesRainSensor, zone[i].usesPump);
 }
 
+
 void saveConfig(void) {
   isPromModified = false;
   update(MAGIC_NUM_ADDRESS, MAGIC_NUM);
@@ -1643,12 +1734,83 @@ void saveConfig(void) {
     EEPROM.commit();
 }
 
+
 void update(int addr, byte data) {
   if (EEPROM.read(addr) != data) {
     EEPROM.write(addr, data);
     isPromModified = true;
   }
 }
+
+
+void setupOta(void) {
+  // Port defaults to 8266
+  // ArduinoOTA.setPort(8266);
+
+  // Hostname defaults to esp8266-[ChipID]
+  ArduinoOTA.setHostname(config.host_name);
+
+  // No authentication by default
+  // ArduinoOTA.setPassword("admin");
+
+  // Password can be set with it's md5 value as well
+  // MD5(admin) = 21232f297a57a5a743894a0e4a801fc3
+  // ArduinoOTA.setPasswordHash("21232f297a57a5a743894a0e4a801fc3");
+
+  ArduinoOTA.onStart([]() {
+    String type;
+    if (ArduinoOTA.getCommand() == U_FLASH) {
+      type = "sketch";
+    } else { // U_FS
+      type = "filesystem";
+    }
+
+    // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+    Serial.println("Start updating " + type);
+  });
+  
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    const char *msg = "Unknown Error";
+    if (error == OTA_AUTH_ERROR) {
+      msg = "Auth Failed";
+    } else if (error == OTA_BEGIN_ERROR) {
+      msg = "Begin Failed";
+    } else if (error == OTA_CONNECT_ERROR) {
+      msg = "Connect Failed";
+    } else if (error == OTA_RECEIVE_ERROR) {
+      msg = "Receive Failed";
+    } else if (error == OTA_END_ERROR) {
+      msg = "End Failed";
+    }
+    Serial.println(msg);
+  });
+  
+  ArduinoOTA.begin();
+  Serial.println("Arduino OTA ready");
+
+  char host[20];
+  sprintf(host, "%s-webupdate", config.host_name);
+  MDNS.begin(host);
+  httpUpdater.setup(&server);
+  MDNS.addService("http", "tcp", 80);
+  Serial.println("Web OTA ready");
+}
+
+
+void setupMqtt() {
+  client.setServer(config.mqtt_ip_addr, config.mqtt_ip_port);
+  client.setCallback(callback);
+}
+
 
 void saveProgramConfig(void) {
   isPromModified = false;
@@ -1661,6 +1823,7 @@ void saveProgramConfig(void) {
   if (isPromModified)
     EEPROM.commit();
 }
+
 
 void saveZoneConfig(void) {
   isPromModified = false;
@@ -1675,6 +1838,7 @@ void saveZoneConfig(void) {
 
   logNames();
 }
+
 
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght) {
   switch(type) {
@@ -1705,6 +1869,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         webClient = num;
       
         // send the current state
+        printName();
         printModeState(false);
         printRainState(false);
         printWatering(false);
@@ -1738,6 +1903,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         strcpy(json, "{");
         sprintf(json+strlen(json), "\"date\":\"%s\"", __DATE__);
         sprintf(json+strlen(json), ",\"time\":\"%s\"", __TIME__);
+        sprintf(json+strlen(json), ",\"host_name\":\"%s\"", config.host_name);
+        sprintf(json+strlen(json), ",\"use_mqtt\":\"%d\"", config.use_mqtt);
+        sprintf(json+strlen(json), ",\"mqtt_ip_addr\":\"%s\"", config.mqtt_ip_addr);
+        sprintf(json+strlen(json), ",\"mqtt_ip_port\":\"%d\"", config.mqtt_ip_port);
+        sprintf(json+strlen(json), ",\"ssid\":\"%s\"", ssid.c_str());
         sprintf(json+strlen(json), ",\"timeout\":\"%d\"", config.display_timeout);
         sprintf(json+strlen(json), ",\"water_adjust\":\"%d\"", config.water_adjust);
         sprintf(json+strlen(json), ",\"use_zimmerman\":\"%d\"", config.use_zimmerman);
@@ -1806,7 +1976,13 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           ptr = strstr(ptr, target) + strlen(target)+3;
           config.mode = strtol(ptr, &ptr, 10);
           modeChange(false);
-        }        
+
+          // cpd...do mqtt
+          // mqtt
+//          char topic[30];
+//          sprintf(topic, "%s/fan", config.host_name);
+//          client.publish(topic, ((nightlightState == LOW) ? "off" : "on"));
+        }
       }
       else if (num == programClient) {
         Serial.printf("save programs\n");
@@ -1838,11 +2014,35 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         if (strncmp(ptr,"reboot",6) == 0) {
           ESP.restart();
         }
+        else if (strncmp(ptr,"wifi",4) == 0) {
+          wifiManager.resetSettings();
+          ESP.restart();
+        }
         else if (strncmp(ptr,"save",4) == 0) {
           Serial.printf("save setup\n");
           
-          const char *target = "timeout";
+          const char *target = "host_name";
           char *ptr = strstr((char *)payload, target) + strlen(target)+3;
+          char *end = strchr(ptr, '\"');
+          memcpy(config.host_name, ptr, (end-ptr));
+          config.host_name[end-ptr] = '\0';
+
+          target = "use_mqtt";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.use_mqtt = strtol(ptr, &ptr, 10);
+
+          target = "mqtt_ip_addr";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          end = strchr(ptr, '\"');
+          memcpy(config.mqtt_ip_addr, ptr, (end-ptr));
+          config.mqtt_ip_addr[end-ptr] = '\0';
+
+          target = "mqtt_ip_port";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.mqtt_ip_port = strtol(ptr, &ptr, 10);
+
+          target = "timeout";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
           config.display_timeout = strtol(ptr, &ptr, 10);
   
           target = "water_adjust";
@@ -1855,7 +2055,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
   
           target = "key";
           ptr = strstr((char *)payload, target) + strlen(target)+3;
-          char *end = strchr(ptr, '\"');
+          end = strchr(ptr, '\"');
           memcpy(config.wu_key, ptr, (end-ptr));
           config.wu_key[end-ptr] = '\0';
   
@@ -1913,6 +2113,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           memcpy(config.chip_type, ptr, (end-ptr));
           config.chip_type[end-ptr] = '\0';
 
+    Serial.printf("host_name %s\n", config.host_name);
+    Serial.printf("use_mqtt %d\n", config.use_mqtt);
+    Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
+    Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
     Serial.printf("display_timeout %d\n", config.display_timeout);
     Serial.printf("water_adjust %d\n", config.water_adjust);
     Serial.printf("use_zimmerman %d\n", config.use_zimmerman);
@@ -2062,6 +2266,7 @@ void logZone(int zone, int duration, char action, int percentage) {
     free(data);
   }
 }
+
 
 void logRainState(void) {
   if (isRain)
@@ -2307,42 +2512,6 @@ void requestZimmermanAdjustNow(void) {
 }
 
 
-void setUpOta(void) {
-  server.on("/update", HTTP_POST, [](){
-    server.sendHeader("Connection", "close");
-    server.sendHeader("Access-Control-Allow-Origin", "*");
-    server.send(200, "text/plain", (Update.hasError())?"FAIL":"OK");
-    ESP.restart();
-  },[](){
-    HTTPUpload& upload = server.upload();
-    if(upload.status == UPLOAD_FILE_START){
-      Serial.setDebugOutput(true);
-      Serial.printf("Update filename: %s\n", upload.filename.c_str());
-      uint32_t maxSketchSpace = (ESP.getFreeSketchSpace() - 0x1000) & 0xFFFFF000;
-      if(!Update.begin(maxSketchSpace)){//start with max available size
-        Update.printError(Serial);
-      }
-    } else if(upload.status == UPLOAD_FILE_WRITE){
-      Serial.printf("uploaded: %d\n", upload.totalSize);
-      if(Update.write(upload.buf, upload.currentSize) == upload.currentSize){
-        // update the total percent complete on the web page
-        // cpd
-      }
-      else {
-        Update.printError(Serial);
-      }
-    } else if(upload.status == UPLOAD_FILE_END){
-      if(Update.end(true)){ //true to set the size to the current progress
-        Serial.printf("Update Success: %u\nRebooting...\n", upload.totalSize);
-      } else {
-        Update.printError(Serial);
-      }
-      Serial.setDebugOutput(false);
-    }
-    yield();
-  });
-}
-
 //format bytes
 String formatBytes(size_t bytes){
   if (bytes < 1024){
@@ -2355,6 +2524,7 @@ String formatBytes(size_t bytes){
     return String(bytes/1024.0/1024.0/1024.0)+"GB";
   }
 }
+
 
 String getContentType(String filename){
   if(server.hasArg("download")) return "application/octet-stream";
@@ -2373,6 +2543,7 @@ String getContentType(String filename){
   return "text/plain";
 }
 
+
 bool handleFileRead(String path){
   Serial.println("handleFileRead: " + path);
   if(path.endsWith("/")) path += "index.htm";
@@ -2388,6 +2559,7 @@ bool handleFileRead(String path){
   }
   return false;
 }
+
 
 void handleFileUpload_edit(){
   HTTPUpload& upload = server.upload();
@@ -2408,6 +2580,7 @@ void handleFileUpload_edit(){
   }
 }
 
+
 void handleFileDelete(){
   if(server.args() == 0) return server.send(500, "text/plain", "BAD ARGS");
   String path = server.arg(0);
@@ -2420,6 +2593,7 @@ void handleFileDelete(){
   server.send(200, "text/plain", "");
   path = String();
 }
+
 
 void handleFileCreate(){
   if(server.args() == 0)
@@ -2438,6 +2612,7 @@ void handleFileCreate(){
   server.send(200, "text/plain", "");
   path = String();
 }
+
 
 void handleFileList() {
   if(!server.hasArg("dir")) {server.send(500, "text/plain", "BAD ARGS"); return;}
@@ -2464,6 +2639,7 @@ void handleFileList() {
   server.send(200, "text/json", output);
 }
 
+
 void countRootFiles(void) {
   int num = 0;
   size_t totalSize = 0;
@@ -2477,6 +2653,7 @@ void countRootFiles(void) {
   }
   Serial.printf("FS File: serving %d files, size: %s from /\n", num, formatBytes(totalSize).c_str());
 }
+
 
 void setupWebServer(void) {
   SPIFFS.begin();
@@ -2501,8 +2678,6 @@ void setupWebServer(void) {
   //second callback handles file uploads at that location
   server.on("/edit", HTTP_POST, [](){ server.send(200, "text/plain", ""); }, handleFileUpload_edit);
 
-  setUpOta();
-
   //called when the url is not defined here
   //use it to load content from SPIFFS
   server.onNotFound([](){
@@ -2514,6 +2689,55 @@ void setupWebServer(void) {
 
   Serial.println("HTTP server started");
 }
+
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+//    // Create a random client ID
+//    String clientId = "ESP8266Client-";
+//    clientId += String(random(0xffff), HEX);
+//    // Attempt to connect
+//    if (client.connect(clientId.c_str())) {
+    if (client.connect(config.host_name)) {
+      Serial.println("connected");
+      // ... and resubscribe
+      char topic[30];
+      sprintf(topic, "%s/command", config.host_name);
+      client.subscribe(topic);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  // only topic we get is <host_name>/command or nightlight
+  
+  char value[12];
+  memcpy(value, payload, length);
+  value[length] = '\0';
+  Serial.printf("Message arrived [%s] %s\n", topic, value);
+
+//  if (strcmp(topic, "command") == 0) {
+//    // cpd...do something
+//      
+//    // also send to main display
+//    if (webClient != -1) {
+//      sendWeb("code", value);
+//    }
+//  }
+//  else {
+//    Serial.printf("Unknown topic\n");
+//  }
+}
+
 
 void command(String cmd, String id) {
   Serial.print(F("sending command "));
@@ -2554,6 +2778,7 @@ void command(String cmd, String id) {
   httpclient.stop();
   Serial.println(F("done"));
 }
+
 
 String getId(void) {
   Serial.println(F("getting transmission id"));
@@ -2601,9 +2826,11 @@ String getId(void) {
   return id;
 }
 
+
 void startTorrents(String id) {
   command("torrent-start", id);
 }
+
 
 void stopTorrents(String id) {
   command("torrent-stop", id);
