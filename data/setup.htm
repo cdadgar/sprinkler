@@ -7,6 +7,18 @@
 #span {
   width: 30px;
 }
+#ssid {
+  width: 90px;
+}
+#host_name {
+  width: 90px;
+}
+#mqtt_ip_addr {
+  width: 90px;
+}
+#mqtt_ip_port {
+  width: 30px;
+}
 #timeout {
   width: 30px;
 }
@@ -19,25 +31,7 @@
 #location {
   width: 90px;
 }
-#logging_ip_addr {
-  width: 90px;
-}
-#logging_ip_port {
-  width: 30px;
-}
-#log_url {
-  width: 200px;
-}
 #rainBlackoutMultiplier {
-  width: 30px;
-}
-#torrent_ip_addr {
-  width: 90px;
-}
-#torrent_ip_port {
-  width: 30px;
-}
-#torrent_delay {
   width: 30px;
 }
 #chip_type {
@@ -59,21 +53,19 @@ function message(msg){
     
   $('#date').html(obj.date);
   $('#time').html(obj.time);
+  $('#ssid').html(obj.ssid);
+  $('#host_name').val(obj.host_name);
+  $('#use_mqtt').prop('checked', obj.use_mqtt=='1');
+  $('#mqtt_ip_addr').val(obj.mqtt_ip_addr);
+  $('#mqtt_ip_port').val(obj.mqtt_ip_port);
   $('#timeout').val(obj.timeout);
   $('#water_adjust').val(obj.water_adjust);
   $('#use_zimmerman').prop('checked', obj.use_zimmerman=='1');
   $('#key').val(obj.key);
   $('#location').val(obj.location);
-  $('#use_logging').prop('checked', obj.use_logging=='1');
-  $('#logging_ip_addr').val(obj.logging_ip_addr);
-  $('#logging_ip_port').val(obj.logging_ip_port);
-  $('#log_url').val(obj.log_url);
   $('#rainBlackoutMultiplier').val(obj.rainBlackoutMultiplier);
-  $('#use_torrent').prop('checked', obj.use_torrent=='1');
-  $('#torrent_ip_addr').val(obj.torrent_ip_addr);
-  $('#torrent_ip_port').val(obj.torrent_ip_port);
-  $('#torrent_delay').val(obj.torrent_delay);
   $('#chip_type').val(obj.chip_type);
+  $('#use_rain').prop('checked', obj.use_rain=='1');
 }
 
 function initGui() {
@@ -88,7 +80,7 @@ function initGui() {
   });
 
   $('#ota').button().click(function(event) {
-    window.location.href='update.htm';
+    window.location.href='update';
   });
 
   $('#spiffs').button().click(function(event) {
@@ -102,6 +94,21 @@ function initGui() {
     socket.send(JSON.stringify(json)); 
   });
 
+  $('#wifi').button().click(function(event) {
+    var json = {
+      command: 'wifi'
+    };
+    socket.send(JSON.stringify(json));
+	alert('Join the SPRINKLER access point to configure the wifi');
+  });
+
+  $('#rain').button().click(function(event) {
+    var json = {
+      command: 'rain'
+    };
+    socket.send(JSON.stringify(json));
+  });
+
   $('#cancel').button().click(function(event) {
     close();
   });
@@ -110,21 +117,18 @@ function initGui() {
 function doSave() {
   var json = {
     command: 'save',
+ 	host_name: $('#host_name').val(),
+    use_mqtt: $('#use_mqtt').is(':checked') ? '1' : '0',
+	mqtt_ip_addr: $('#mqtt_ip_addr').val(),
+	mqtt_ip_port: $('#mqtt_ip_port').val(),
     timeout: $('#timeout').val(),
     water_adjust: $('#water_adjust').val(),
     use_zimmerman: $('#use_zimmerman').is(':checked') ? '1' : '0',
     key: $('#key').val(),
     location: $('#location').val(),
-    use_logging: $('#use_logging').is(':checked') ? '1' : '0',
-	logging_ip_addr: $('#logging_ip_addr').val(),
-	logging_ip_port: $('#logging_ip_port').val(),
-	log_url: $('#log_url').val(),
 	rainBlackoutMultiplier: $('#rainBlackoutMultiplier').val(),
-	use_torrent: $('#use_torrent').is(':checked') ? '1' : '0',
-	torrent_ip_addr: $('#torrent_ip_addr').val(),
-	torrent_ip_port: $('#torrent_ip_port').val(),
-	torrent_delay: $('#torrent_delay').val(),
-	chip_type: $('#chip_type').val()
+	chip_type: $('#chip_type').val(),
+    use_rain: $('#use_rain').is(':checked') ? '1' : '0'	
   };
   console.log(JSON.stringify(json));
   socket.send(JSON.stringify(json)); 
@@ -139,25 +143,25 @@ function close() {
 <div id='message' style='zoom:200%;'></div>
 <div id='controls'>
   Compiled:<br><label id='date'></label>,<label id='time'></label><br>
+  SSID:<label id='ssid'></label><br>
+  Host Name:<input id='host_name'><br>
+  <input type='checkbox' id='use_mqtt'>Use MQTT<br>
+  MQTT IP Address:<input id='mqtt_ip_addr'><br>
+  MQTT Port:<input id='mqtt_ip_port'><br>
   Screen Timeout:<input id='timeout'><br>
   Water Adjust %:<input id='water_adjust'><br>
   <input type='checkbox' id='use_zimmerman'>Use Zimmerman Adjust<br>
   Wunderground Key:<input id='key'><br>
   Wunderground Location:<input id='location'><br>
-  <input type='checkbox' id='use_logging'>Use Logging<br>
-  Logging IP Address:<input id='logging_ip_addr'><br>
-  Logging Port:<input id='logging_ip_port'><br>
-  Log URL:<input id='log_url'><br>
   Rain Delay Multiplier:<input id='rainBlackoutMultiplier'><br>
-  <input type='checkbox' id='use_torrent'>Pause Torrents<br>
-  Transmission IP Address:<input id='torrent_ip_addr'><br>
-  Transmission Port:<input id='torrent_ip_port'><br>
-  Delay after stop:<input id='torrent_delay'><br>
   Chip Type:<input id='chip_type'><br>
+  <input type='checkbox' id='use_rain'>Use Rain Sensor<br>
   <br>
   <button id='spiffs'>SPIFFS</button>
   <button id='ota'>OTA Update</button><br><br>
-  <!-- <button id='reboot'>Reboot</button><br><br> -->
+  <button id='reboot'>Reboot</button>
+  <button id='wifi'>Reset Wifi</button><br><br>
+  <button id='rain'>Reset Rain</button><br><br>
   <button id='save'>Save</button>
   <button id='cancel'>Cancel</button>
 </div>

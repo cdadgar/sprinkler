@@ -53,8 +53,6 @@ what does the boot mode refer to?  are the pins being pulled up/down correctly? 
 
 /*
  * todo:
- *  - add ota
- *  - add mqtt
  */
 
 /*
@@ -156,13 +154,6 @@ const char WUNDERGROUND_REQ3[] = ".json HTTP/1.1\r\n"
     "Connection: close\r\n"
     "\r\n";
 
-#define LOGGING_IP_ADDR "192.168.1.210"
-#define LOGGING_IP_PORT 80
-#define LOG_URL "http://cpd.us.to:90/sprinkler/"
-
-#define TORRENT_IP_ADDR "192.168.1.210"
-#define TORRENT_IP_PORT 9091
-
 #define TEMP_ERROR -999
 
 // --------------------------------------------
@@ -236,7 +227,7 @@ byte zoneAddrs[] = { MUX2,  MUX2,  MUX1,  MUX1,  MUX1,  MUX2,  MUX2,  MUX2,  MUX
 #define ZONE9  0x20  // P5  MUX2
 #define ZONE10 0x40  // P6  MUX2
 
-// the rain sesnor is normally closed, and opens up when it gets wet
+// the rain sensor is normally closed, and opens up when it gets wet
 #define RAIN_SENSOR_TRIGGERED HIGH
 #define rainSensorMask  0x08  // P3
 #define rainSensorAddr  MUX1
@@ -395,16 +386,9 @@ typedef struct {
   byte use_zimmerman;
   char wu_key[20];
   char wu_location[20];
-  byte use_logging;
-  char logging_ip_addr[17];
-  int  logging_ip_port;
-  char log_url[40];
   byte rainBlackoutMultiplier;
-  byte use_torrent;
-  char torrent_ip_addr[17];
-  int  torrent_ip_port;
-  byte torrent_delay;
   char chip_type[3];
+  byte use_rain;
 } configType;
 
 configType config;
@@ -462,14 +446,10 @@ void checkProgram(int day, int h, int m);
 void update(int addr, byte data);
 void rainChange(void);
 void logRainState(void);
-String getId(void);
 void logAction(char action);
-void logNames(void);
 void logZone(int zone, int duration, char action, int percentage);
 void requestZimmermanAdjust(void);
 void requestZimmermanAdjustNow(void);
-void startTorrents(String id);
-void stopTorrents(String id);
 
 
 void setup() {
@@ -763,7 +743,7 @@ void setupTime(void) {
 
 void setupDisplay(void) {
   // initialize the lcd 
-  lcd.begin();
+  lcd.init();
   lcd.clear();
 
   displayBacklight(true);
@@ -940,28 +920,30 @@ void checkTimeMinutes() {
   lastMinutes = minutes;
   printTime(true, true, false);
 
-  
-  bool isRained = (getRainSensor() == RAIN_SENSOR_TRIGGERED);
-//  Serial.printf("isRained %d\n", isRained);
-  if (isRain != isRained) {
-    isRain = isRained;
-    rainChange();
-    printRainState(true);
-    logRainState();
-  }
-  else {
-    if (isRain) {
-      // still raining
-      ++rainTime;
+
+  if (config.use_rain) {
+    bool isRained = (getRainSensor() == RAIN_SENSOR_TRIGGERED);
+  //  Serial.printf("isRained %d\n", isRained);
+    if (isRain != isRained) {
+      isRain = isRained;
+      rainChange();
       printRainState(true);
+      logRainState();
     }
     else {
-      // still not raining
-      if (rainBlackoutTime > 0) {
-        --rainBlackoutTime;
-        if (rainBlackoutTime == 0)
-          logAction(RAIN_BLACKOUT_OVER);
+      if (isRain) {
+        // still raining
+        ++rainTime;
         printRainState(true);
+      }
+      else {
+        // still not raining
+        if (rainBlackoutTime > 0) {
+          --rainBlackoutTime;
+          if (rainBlackoutTime == 0)
+            logAction(RAIN_BLACKOUT_OVER);
+          printRainState(true);
+        }
       }
     }
   }
@@ -1487,12 +1469,14 @@ void stopCurrentZone(void) {
 void startNextZone(void) {
   stopCurrentZone();
 
-  bool isRained = (getRainSensor() == RAIN_SENSOR_TRIGGERED);
-  if (isRain != isRained) {
-    isRain = isRained;
-    rainChange();
-    printRainState(true);
-    logRainState();
+  if (config.use_rain) {
+    bool isRained = (getRainSensor() == RAIN_SENSOR_TRIGGERED);
+    if (isRain != isRained) {
+      isRain = isRained;
+      rainChange();
+      printRainState(true);
+      logRainState();
+    }
   }
 
   // locate the next zone with a non zero duration
@@ -1534,12 +1518,14 @@ void startNextZone(void) {
 void startPreviousZone(void) {
   stopCurrentZone();
 
-  bool isRained = (getRainSensor() == RAIN_SENSOR_TRIGGERED);
-  if (isRain != isRained) {
-    isRain = isRained;
-    rainChange();
-    printRainState(true);
-    logRainState();
+  if (config.use_rain) {
+    bool isRained = (getRainSensor() == RAIN_SENSOR_TRIGGERED);
+    if (isRain != isRained) {
+      isRain = isRained;
+      rainChange();
+      printRainState(true);
+      logRainState();
+    }
   }
 
   // locate the previous zone with a non zero duration
@@ -1609,7 +1595,7 @@ void checkProgram(int day, int h, int m) {
 }
 
 
-#define MAGIC_NUM   0xAD
+#define MAGIC_NUM   0xED
 
 #define MAGIC_NUM_ADDRESS      0
 #define CONFIG_ADDRESS         1
@@ -1643,16 +1629,9 @@ void loadConfig(void) {
     config.use_zimmerman = 1;
     set(config.wu_key, WU_API_KEY);
     set(config.wu_location, WU_LOCATION);
-    config.use_logging = 1;
-    set(config.logging_ip_addr, LOGGING_IP_ADDR);
-    config.logging_ip_port = LOGGING_IP_PORT;
-    set(config.log_url, LOG_URL);
     config.rainBlackoutMultiplier = 3;
-    config.use_torrent = 1;
-    set(config.torrent_ip_addr, TORRENT_IP_ADDR);
-    config.torrent_ip_port = TORRENT_IP_PORT;
-    config.torrent_delay = 5;
     set(config.chip_type, "AP");
+    config.use_rain = 1;
 
     saveConfig();
   }
@@ -1673,16 +1652,9 @@ void loadConfig(void) {
   Serial.printf("use_zimmerman %d\n", config.use_zimmerman);
   Serial.printf("wu_key %s\n", config.wu_key);
   Serial.printf("wu_location %s\n", config.wu_location);
-  Serial.printf("use_logging %d\n", config.use_logging);
-  Serial.printf("logging_ip_addr %s\n", config.logging_ip_addr);
-  Serial.printf("logging_ip_port %d\n", config.logging_ip_port);
-  Serial.printf("log_url %s\n", config.log_url);
   Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
-  Serial.printf("use_torrent %d\n", config.use_torrent);
-  Serial.printf("torrent_ip_addr %s\n", config.torrent_ip_addr);
-  Serial.printf("torrent_ip_port %d\n", config.torrent_ip_port);
-  Serial.printf("torrent_delay %d\n", config.torrent_delay);
   Serial.printf("chip_type %s\n", config.chip_type);
+  Serial.printf("use_rain %d\n", config.use_rain);
 }
 
 
@@ -1835,8 +1807,6 @@ void saveZoneConfig(void) {
 
   if (isPromModified)
     EEPROM.commit();
-
-  logNames();
 }
 
 
@@ -1874,8 +1844,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         printRainState(false);
         printWatering(false);
         printTime(false, false, false);
-        sendWeb("log_url", config.log_url);
-      }
+     }
       else if (strcmp((char *)payload,"/program") == 0) {
         programClient = num;
         
@@ -1913,16 +1882,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         sprintf(json+strlen(json), ",\"use_zimmerman\":\"%d\"", config.use_zimmerman);
         sprintf(json+strlen(json), ",\"key\":\"%s\"", config.wu_key);
         sprintf(json+strlen(json), ",\"location\":\"%s\"", config.wu_location);
-        sprintf(json+strlen(json), ",\"use_logging\":\"%d\"", config.use_logging);
-        sprintf(json+strlen(json), ",\"logging_ip_addr\":\"%s\"", config.logging_ip_addr);
-        sprintf(json+strlen(json), ",\"logging_ip_port\":\"%d\"", config.logging_ip_port);
-        sprintf(json+strlen(json), ",\"log_url\":\"%s\"", config.log_url);
         sprintf(json+strlen(json), ",\"rainBlackoutMultiplier\":\"%d\"", config.rainBlackoutMultiplier);        
-        sprintf(json+strlen(json), ",\"use_torrent\":\"%d\"", config.use_torrent);
-        sprintf(json+strlen(json), ",\"torrent_ip_addr\":\"%s\"", config.torrent_ip_addr);
-        sprintf(json+strlen(json), ",\"torrent_ip_port\":\"%d\"", config.torrent_ip_port);
-        sprintf(json+strlen(json), ",\"torrent_delay\":\"%d\"", config.torrent_delay);
         sprintf(json+strlen(json), ",\"chip_type\":\"%s\"", config.chip_type);
+        sprintf(json+strlen(json), ",\"use_rain\":\"%d\"", config.use_rain);
         strcpy(json+strlen(json), "}");
 //        Serial.printf("len %d\n", strlen(json));
         webSocket.sendTXT(setupClient, json, strlen(json));
@@ -1976,12 +1938,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           ptr = strstr(ptr, target) + strlen(target)+3;
           config.mode = strtol(ptr, &ptr, 10);
           modeChange(false);
-
-          // cpd...do mqtt
-          // mqtt
-//          char topic[30];
-//          sprintf(topic, "%s/fan", config.host_name);
-//          client.publish(topic, ((nightlightState == LOW) ? "off" : "on"));
         }
       }
       else if (num == programClient) {
@@ -2017,6 +1973,13 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         else if (strncmp(ptr,"wifi",4) == 0) {
           wifiManager.resetSettings();
           ESP.restart();
+        }
+        else if (strncmp(ptr,"rain",4) == 0) {
+          isRain = false;
+          rainTime = 0;
+          rainBlackoutTime = 0;
+          printRainState(true);
+          logRainState();
         }
         else if (strncmp(ptr,"save",4) == 0) {
           Serial.printf("save setup\n");
@@ -2065,53 +2028,19 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           memcpy(config.wu_location, ptr, (end-ptr));
           config.wu_location[end-ptr] = '\0';
 
-          target = "use_logging";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          config.use_logging = strtol(ptr, &ptr, 10);
-          
-          target = "logging_ip_addr";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          end = strchr(ptr, '\"');
-          memcpy(config.logging_ip_addr, ptr, (end-ptr));
-          config.logging_ip_addr[end-ptr] = '\0';
-
-          target = "logging_ip_port";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          config.logging_ip_port = strtol(ptr, &ptr, 10);
-
-          target = "log_url";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          end = strchr(ptr, '\"');
-          memcpy(config.log_url, ptr, (end-ptr));
-          config.log_url[end-ptr] = '\0';
-
           target = "rainBlackoutMultiplier";
           ptr = strstr((char *)payload, target) + strlen(target)+3;
           config.rainBlackoutMultiplier = strtol(ptr, &ptr, 10);
-
-          target = "use_torrent";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          config.use_torrent = strtol(ptr, &ptr, 10);
-          
-          target = "torrent_ip_addr";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          end = strchr(ptr, '\"');
-          memcpy(config.torrent_ip_addr, ptr, (end-ptr));
-          config.torrent_ip_addr[end-ptr] = '\0';
-
-          target = "torrent_ip_port";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          config.torrent_ip_port = strtol(ptr, &ptr, 10);
-
-          target = "torrent_delay";
-          ptr = strstr((char *)payload, target) + strlen(target)+3;
-          config.torrent_delay = strtol(ptr, &ptr, 10);
 
           target = "chip_type";
           ptr = strstr((char *)payload, target) + strlen(target)+3;
           end = strchr(ptr, '\"');
           memcpy(config.chip_type, ptr, (end-ptr));
           config.chip_type[end-ptr] = '\0';
+
+          target = "use_rain";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.use_rain = strtol(ptr, &ptr, 10);
 
     Serial.printf("host_name %s\n", config.host_name);
     Serial.printf("use_mqtt %d\n", config.use_mqtt);
@@ -2122,16 +2051,9 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
     Serial.printf("use_zimmerman %d\n", config.use_zimmerman);
     Serial.printf("wu_key %s\n", config.wu_key);
     Serial.printf("wu_location %s\n", config.wu_location);
-    Serial.printf("use_logging %d\n", config.use_logging);
-    Serial.printf("logging_ip_addr %s\n", config.logging_ip_addr);
-    Serial.printf("logging_ip_port %d\n", config.logging_ip_port);
-    Serial.printf("log_url %s\n", config.log_url);
     Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
-    Serial.printf("use_torrent %d\n", config.use_torrent);
-    Serial.printf("torrent_ip_addr %s\n", config.torrent_ip_addr);
-    Serial.printf("torrent_ip_port %d\n", config.torrent_ip_port);
-    Serial.printf("torrent_delay %d\n", config.torrent_delay);
     Serial.printf("chip_type %s\n", config.chip_type);
+    Serial.printf("use_rain %d\n", config.use_rain);
           saveConfig();
         }
       }
@@ -2187,84 +2109,14 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 }
 
 
-
-const char http_path_zone[]   = "/sprinkler/remote/insertZone.php";
-const char http_path_action[] = "/sprinkler/remote/insertAction.php";
-const char http_path_name[]   = "/sprinkler/remote/insertName.php";
-
-typedef struct {
-  int zone;
-  int duration;
-  char action[2];
-  int percentage;
-} logZoneType;
-
-
 void logZone(int zone, int duration, char action, int percentage) {
-  if (!config.use_logging)
-    return;
-    
-  AsyncClient* aclient = new AsyncClient();
-
-  logZoneType* data = new logZoneType;
-  data->zone = zone;
-  data->duration = duration;
-  data->action[0] = action;
-  data->action[1] = '\0';
-  data->percentage = percentage;
-  
-  aclient->onConnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onConnect\n");
-    
-    logZoneType* data = (logZoneType*) obj;
-    
-    // after connecting, send the request
-    // Make an HTTP GET request
-    c->write( "GET ");
-    c->write( http_path_zone );
-    c->write("?zone=");
-    c->write( String(data->zone+1).c_str() );
-    c->write("&");
-    c->write("duration=");
-    c->write( String(data->duration).c_str() );
-    c->write("&");
-    c->write("action=");
-    c->write( data->action );
-    c->write("&");
-    c->write("percentage=");
-    c->write( String(data->percentage).c_str() );
-    c->write( " HTTP/1.1\r\n");
-    c->write("Host: ");
-    c->write(config.logging_ip_addr);
-    c->write( "\r\nContent-Type: application/x-www-form-urlencoded\r\n" );
-    c->write("Connection: close\r\n\r\n");
-    c->stop();
-
-//    Serial.print("logged zone: ");
-//    Serial.println(data->zone);
-    free(obj);
-  }, data);
-
-  aclient->onDisconnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onDisconnect\n");
-    free(c);
-  }, NULL);
-
-  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
-    Serial.printf("logZone [A-TCP] onError: %s\n", c->errorToString(err));
-  }, NULL);
-
-  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
-//    Serial.printf("[A-TCP] onData: %s\n", buf);
-  }, NULL);
-
-//  Serial.printf("connecting to %s:%d\n", config.logging_ip_addr, config.logging_ip_port);
-//  unsigned long t = millis();
-  if (!aclient->connect(config.logging_ip_addr, config.logging_ip_port)) {
-//    Serial.printf("connect failed %d\n", (millis() - t));
-    free(aclient);
-    free(data);
-  }
+  // mqtt
+  char topic[30];
+  sprintf(topic, "%s/zone", config.host_name);
+  char json[128];
+  sprintf(json, "{\"zone\":\"%d\",\"duration\":\"%d\",\"action\":\"%c\",\"percentage\":\"%d\"}",
+    zone, duration, action, percentage);
+  client.publish(topic, json);
 }
 
 
@@ -2277,110 +2129,12 @@ void logRainState(void) {
 
 
 void logAction(char action) {
-  if (!config.use_logging)
-    return;
-
-  char* str = new char[2];
-  str[0] = action;
-  str[1] = '\0';
-
-  AsyncClient* aclient = new AsyncClient();
-
-  aclient->onConnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onConnect\n");
-    // after connecting, send the request
-    // Make an HTTP GET request
-    c->write( "GET ");
-    c->write( http_path_action );
-    c->write("?action=");
-    char* str = (char*) obj;
-    c->write( str );
-    c->write( " HTTP/1.1\r\n");
-    c->write("Host: ");
-    c->write(config.logging_ip_addr);
-    c->write( "\r\nContent-Type: application/x-www-form-urlencoded\r\n" );
-    c->write("Connection: close\r\n\r\n");
-    c->stop();
-
-//    Serial.print("logged action: ");
-//    Serial.println(str);
-    free(str);
-  }, str);
-
-  aclient->onDisconnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onDisconnect\n");
-    free(c);
-  }, NULL);
-
-  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
-    Serial.printf("logAction [A-TCP] onError: %s\n", c->errorToString(err));
-  }, NULL);
-
-  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
-//    Serial.printf("[A-TCP] onData: %s\n", buf);
-  }, NULL);
-
-//  Serial.printf("connecting to %s:%d\n", config.logging_ip_addr, config.logging_ip_port);
-  if (!aclient->connect(config.logging_ip_addr, config.logging_ip_port)) {
-    free(aclient);
-    free(str);
-  }
-}
-
-
-void logNames(void) {
-  if (!config.use_logging)
-    return;
-    
-  AsyncClient* aclient = new AsyncClient();
-
-  aclient->onConnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onConnect\n");
-    // after connecting, send the request
-    // Make an HTTP GET request
-    c->write( "GET ");
-    c->write( http_path_name );
-
-    for (int i=0; i < NUM_ZONES; ++i) {
-      if (i == 0)
-        c->write("?");
-      else
-        c->write("&");
-      c->write(String(i+1).c_str());
-      c->write("=");
-      // the name may have spaces in it which need to be url encoded
-      String str = zone[i].name;
-      str.replace(" ", "%20");
-      c->write( str.c_str() );
-    }
-
-    c->write( " HTTP/1.1\r\n");
-    c->write("Host: ");
-    c->write(config.logging_ip_addr);
-    c->write( "\r\nContent-Type: application/x-www-form-urlencoded\r\n" );
-    c->write("Connection: close\r\n\r\n");
-    c->stop();
-
-//    Serial.println("logged names");
-  }, NULL);
-
-  aclient->onDisconnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onDisconnect\n");
-    free(c);
-  }, NULL);
-
-  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
-    Serial.printf("logNames [A-TCP] onError: %s\n", c->errorToString(err));
-  }, NULL);
-
-  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
-//    Serial.printf("[A-TCP] onData: %s\n", buf);
-  }, NULL);
-
-//  Serial.printf("connecting to %s:%d\n", config.logging_ip_addr, config.logging_ip_port);
-  if (!aclient->connect(config.logging_ip_addr, config.logging_ip_port)) {
-    free(aclient);
-  }
+  // mqtt
+  char topic[30];
+  sprintf(topic, "%s/action", config.host_name);
+  char buf[10];
+  sprintf(buf, "%c", action);
+  client.publish(topic, buf);
 }
 
 
@@ -2399,27 +2153,7 @@ int zimmermanNumGot;
 
 void requestZimmermanAdjust(void) {
   actual_water_adjust = DEFAULT_ADJUST;
-
-  // cpd...fix
-//  String id = "";
-//  if (config.use_torrent == 1) {
-//    id = getId();
-//    if (id.length() > 0) {
-//      stopTorrents(id);
-//
-//      // wait a bit before for things to settle down
-//      if (config.torrent_delay > 0)
-//        delay(1000 * config.torrent_delay);
-//    }
-//  }
-  
   requestZimmermanAdjustNow();
-
-  // cpd...fix
-//  if (config.use_torrent == 1) {
-//    if (id.length() > 0)
-//      startTorrents(id);
-//  }
 }
 
 
@@ -2718,124 +2452,34 @@ void reconnect() {
 
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  // only topic we get is <host_name>/command or nightlight
+  // only topic we get is <host_name>/command
   
+  // strip off the hostname from the topic
+  topic += strlen(config.host_name) + 1;
+
   char value[12];
   memcpy(value, payload, length);
   value[length] = '\0';
   Serial.printf("Message arrived [%s] %s\n", topic, value);
 
-//  if (strcmp(topic, "command") == 0) {
-//    // cpd...do something
-//      
-//    // also send to main display
-//    if (webClient != -1) {
-//      sendWeb("code", value);
-//    }
-//  }
-//  else {
-//    Serial.printf("Unknown topic\n");
-//  }
-}
-
-
-void command(String cmd, String id) {
-  Serial.print(F("sending command "));
-  Serial.println(cmd);
-
-  Serial.print(F("Connecting to "));
-  Serial.println(config.torrent_ip_addr);
-
-  // Use WiFiClient class to create TCP connections
-  WiFiClient httpclient;
-  if (!httpclient.connect(config.torrent_ip_addr, config.torrent_ip_port)) {
-    Serial.println(F("connection failed"));
-    return;
-  }
-
-  Serial.println(F("connected"));
-  String data = "{\"method\":\"" + cmd + "\"}";
-
-  String s;
-  s = "POST /transmission/rpc HTTP/1.1\n";
-  s += "Content-Type: application/json-rpc\n";
-  s += "X-Transmission-Session-Id: ";
-  s += id;
-  s += "\n";
-  s += "Connection: close\n";
-  s += "Content-Length: ";
-  s += data.length();
-  s += "\n\n";
-  s += data;
-  httpclient.print(s);
-
-  Serial.println(F("waiting for reply"));
-  while (httpclient.connected() || httpclient.available()) {
-    String aLine = httpclient.readStringUntil('\n');
-    Serial.println(aLine);
-    delay(1);
-  }
-  httpclient.stop();
-  Serial.println(F("done"));
-}
-
-
-String getId(void) {
-  Serial.println(F("getting transmission id"));
-  String id = "";
-
-  // Open socket to WU server port 80
-  Serial.print(F("Connecting to "));
-  Serial.println(config.torrent_ip_addr);
-
-  // Use WiFiClient class to create TCP connections
-  WiFiClient httpclient;
-  if (!httpclient.connect(config.torrent_ip_addr, config.torrent_ip_port)) {
-    Serial.println(F("connection failed"));
-    return id;
-  }
-
-  Serial.println(F("connected"));
-  String data = "{\"method\":\"session-get\"}";
-
-  String s;
-  s = "POST /transmission/rpc HTTP/1.1\n";
-  s += "Connection: close\n";
-  s += "Content-Length: ";
-  s += data.length();
-  s += "\n\n";
-  s += data;
-  httpclient.print(s);
-
-  String target = "X-Transmission-Session-Id: ";
-  Serial.println(F("waiting for reply"));
-  while (httpclient.connected() || httpclient.available()) {
-    String aLine = httpclient.readStringUntil('\n');
-//    Serial.println(aLine);
-    if (aLine.startsWith(target)) {
-      id = aLine.substring(target.length());
-      Serial.print("ID is |");
-      Serial.print(id);
-      Serial.println("|");
-      break;
+  if (strcmp(topic, "command") == 0) {
+    char action = *value;
+    if (action == PROGRAMS_RUN) {
+      config.mode = RUN;
+      modeChange(false);
     }
-    delay(1);
+    else if (action == PROGRAMS_OFF) {
+      config.mode = OFF;
+      modeChange(false);
+    }
+    else {
+      Serial.printf("Unknown action: %c\n", action);
+    }
   }
-  httpclient.stop();
-  Serial.println(F("done"));
-  return id;
+  else {
+    Serial.printf("Unknown topic: %s\n", topic);
+  }
 }
-
-
-void startTorrents(String id) {
-  command("torrent-start", id);
-}
-
-
-void stopTorrents(String id) {
-  command("torrent-stop", id);
-}
-
 
 
 /*
@@ -2867,8 +2511,4 @@ use weather underground api to get current weather...what forecast can I get?
 
 adjust watering durations (% of total) depending on the season
 i.e. less watering during the rainy season...more during the dry season?
-
-
-
-zimmerman an torrents need to be rewritten using async
 */
