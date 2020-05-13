@@ -2110,13 +2110,15 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 
 
 void logZone(int zone, int duration, char action, int percentage) {
-  // mqtt
-  char topic[30];
-  sprintf(topic, "%s/zone", config.host_name);
-  char json[128];
-  sprintf(json, "{\"zone\":\"%d\",\"duration\":\"%d\",\"action\":\"%c\",\"percentage\":\"%d\"}",
-    zone, duration, action, percentage);
-  client.publish(topic, json);
+  if (config.use_mqtt) {
+    // mqtt
+    char topic[30];
+    sprintf(topic, "%s/zone", config.host_name);
+    char json[128];
+    sprintf(json, "{\"zone\":\"%d\",\"duration\":\"%d\",\"action\":\"%c\",\"percentage\":\"%d\"}",
+      zone, duration, action, percentage);
+    client.publish(topic, json);
+  }
 }
 
 
@@ -2129,12 +2131,14 @@ void logRainState(void) {
 
 
 void logAction(char action) {
-  // mqtt
-  char topic[30];
-  sprintf(topic, "%s/action", config.host_name);
-  char buf[10];
-  sprintf(buf, "%c", action);
-  client.publish(topic, buf);
+  if (config.use_mqtt) {
+    // mqtt
+    char topic[30];
+    sprintf(topic, "%s/action", config.host_name);
+    char buf[10];
+    sprintf(buf, "%c", action);
+    client.publish(topic, buf);
+  }
 }
 
 
