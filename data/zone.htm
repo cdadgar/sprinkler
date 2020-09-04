@@ -10,6 +10,7 @@
 var zone;
 var numZones;
 var socket;
+var runningZone;
 
 $(document).ready(function(){
   initWebsocket('zone');
@@ -20,6 +21,7 @@ function message(msg){
   var obj = JSON.parse(msg.data);
   zone = obj.value;
   numZones = zone.length;
+  runningZone = obj.runningZone;
 
   initGui();
   loadZone();
@@ -46,14 +48,29 @@ function initGui(){
   zones.append(str);
 
   $("input[name^='on']").click(function(event) {
-    var $this = $(this);
-    var id = this.id;
-    var isOn = ($this.is(':checked'));
-    var json = {
-      command: (isOn) ? 'OnZone': 'OffZone',
-      value: id
-    };
-    socket.send(JSON.stringify(json));
+    // turn off the running zone first
+	if (runningZone !== -1) {
+      $('#'+runningZone).prop('checked', false);
+      var json = {
+        command: 'OffZone',
+        value: runningZone
+      };
+      socket.send(JSON.stringify(json));
+	}
+	
+	// now turn on the new zone
+	if (runningZone !== this.id) {
+      var id = this.id;
+      var json = {
+        command: 'OnZone',
+        value: id
+      };
+      socket.send(JSON.stringify(json));
+  	  runningZone = id;
+	}
+	else {
+  	  runningZone = -1;
+	}
   });
 
   $('#save').button().click(function(event) {
@@ -92,6 +109,10 @@ function loadZone() {
     $('#name'+i).val(zone[i][0]);
     $('#sensor'+i).prop('checked', zone[i][1]==1);
     $('#pump'+i).prop('checked', zone[i][2]==1);
+  }
+  
+  if (runningZone !== -1) {
+    $('#'+runningZone).prop('checked', true);
   }
 }
 </script>
