@@ -15,7 +15,14 @@ $(document).ready(function(){
 function message(msg){
 console.log('onmessage ' + msg.data);
   var obj = JSON.parse(msg.data);
-  if (obj.command == 'zone') {
+  if (obj.value != '' && (obj.command == 'currentTemp')) {
+    if (obj.value == '-999.0')
+      return;
+    var extra = '&deg;';
+    $('#'+obj.command).html(obj.value + extra);
+    $('#temp').show();
+  }
+  else if (obj.command == 'zone') {
     // build the manual dialog
 	//console.log(obj.value);
 	var zones = $('#azone');
@@ -39,6 +46,9 @@ function initGui(){
   else
     document.body.style.zoom = '150%';
 
+  // hide temperature until we get a value
+  $('#temp').hide();
+  
   $('#mode').buttonset();
   
   $(':radio').click(function() {
@@ -128,6 +138,9 @@ function runZone() {
   <div style='zoom:200%'>
     <span id='name' class='ui-widget'></span><br>
     <span id='time' class='ui-widget'></span><br>
+	<div id='temp'>
+      <span id='currentTemp' class='ui-widget'></span><br>
+	</div>
     <span id='modeState' class='ui-widget'></span>&nbsp;&nbsp;<span id='rainState' class='ui-widget'></span><br>
     <span id='zoneName' class='ui-widget'></span>&nbsp;&nbsp;<span id='water_adjust' class='ui-widget'></span><br>
     <span id='zoneState' class='ui-widget'></span>&nbsp;

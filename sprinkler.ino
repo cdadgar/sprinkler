@@ -68,6 +68,8 @@ what does the boot mode refer to?  are the pins being pulled up/down correctly? 
  * WiFiManager - https://github.com/tzapu/WiFiManager (git)
  * ESPAsyncTCP - https://github.com/me-no-dev/ESPAsyncTCP (git)
  * ESPAsyncUDP - https://github.com/me-no-dev/ESPAsyncUDP (git)
+ * OneWire - https://github.com/PaulStoffregen/OneWire (git)
+ * DallasTemperature - https://github.com/milesburton/Arduino-Temperature-Control-Library (git)
  * PubSub - https://github.com/knolleary/pubsubclient (git)
  * TimeLib - https://github.com/PaulStoffregen/Time (git)
  * Timezone - https://github.com/JChristensen/Timezone (git)
@@ -112,6 +114,12 @@ String ssid;
 // aync library includes
 #include <ESPAsyncTCP.h>
 #include <ESPAsyncUDP.h>
+
+// --------------------------------------------
+
+// ds18b20 temperture sensor library includes
+#include <OneWire.h> 
+#include <DallasTemperature.h>
 
 // --------------------------------------------
 
@@ -369,6 +377,17 @@ int testAddr = -1;
 int testValue = -1;
 unsigned int testHeap = 0;
 
+// temperature
+#define ONE_WIRE_BUS 3  // RX
+OneWire oneWire(ONE_WIRE_BUS);
+DallasTemperature sensors(&oneWire);
+DeviceAddress thermometer;
+unsigned long lastTempRequest = 0;
+int delayInMillis = 0;
+#define resolution 12
+#define TEMP_ERROR -999
+float lastTemp = TEMP_ERROR;
+
 bool isTimeSet = false;
 
 WiFiClient espClient;
@@ -396,6 +415,7 @@ typedef struct {
   byte rainBlackoutMultiplier;
   char chip_type[3];
   byte use_rain;
+  byte use_temp;
 } configType;
 
 configType config;
@@ -461,7 +481,10 @@ void logZone(int zone, int duration, char action, int percentage);
 
 void setup() {
   // start serial port
-  Serial.begin(115200);
+  // use the RX pin as a gpio (or the temperature sensor)
+  // TX is still used as serial output
+//  Serial.begin(115200);
+  Serial.begin(115200,SERIAL_8N1,SERIAL_TX_ONLY);
   Serial.print(F("\n\n"));
 
   Wire.begin(SDA,SCL);
@@ -493,6 +516,12 @@ void setup() {
   else {
     send(MUX1+MUX_ADD, 0xFF);
     send(MUX2+MUX_ADD, 0xFF);
+  }
+
+  if (config.use_temp) {
+    if (!setupTemperature()) {
+  //    return;
+    }    
   }
 
   setupTime();
@@ -649,6 +678,59 @@ void configModeCallback(WiFiManager *myWiFiManager) {
 }
 
 
+bool setupTemperature(void) {
+//  Serial.println("setupTemperature");
+
+  sensors.begin();
+  if (sensors.getDeviceCount() != 1) {
+    Serial.println("Unable to locate temperature sensor");
+    return false;
+  }
+  if (!sensors.getAddress(thermometer, 0)) {
+    Serial.println("Unable to find address for temperature sensor"); 
+    return false;
+  }
+  sensors.setResolution(thermometer, resolution);
+  sensors.setWaitForConversion(false);
+  sensors.requestTemperatures();
+  delayInMillis = 750 / (1 << (12 - resolution)); 
+  lastTempRequest = millis(); 
+
+//  Serial.println("temperature setup");
+  return true;
+}
+
+void checkTemperature(unsigned long time) {
+  if (!config.use_temp) {
+    return;
+  }
+  
+  if (time - lastTempRequest >= delayInMillis) // waited long enough??
+  {
+//  Serial.println(F("checking temperature"));
+    checkTemperature();
+        
+    sensors.requestTemperatures(); 
+    lastTempRequest = millis(); 
+  }
+}
+
+
+void checkTemperature(void) {
+  float tempF = sensors.getTempF(thermometer);
+  tempF = (float)round(tempF*10)/10.0;
+  if ( tempF == lastTemp )
+    return;
+    
+  lastTemp = tempF;
+
+//  Serial.print("Temperature is ");
+//  Serial.println(tempF);
+
+  printCurrentTemperature();
+}
+
+
 bool setupWifi(void) {
   WiFi.hostname(config.host_name);
   
@@ -751,7 +833,8 @@ void setupTime(void) {
 
 void setupDisplay(void) {
   // initialize the lcd 
-  lcd.init();
+//  lcd.init();
+  lcd.begin();
   lcd.clear();
 
   displayBacklight(true);
@@ -778,6 +861,7 @@ void drawMainScreen(void) {
   lcd.clear();
   
   printTime(true, true, false);
+  printCurrentTemperature();
   printWatering(true);
   printModeState(true);
   printRainState(true);
@@ -849,6 +933,7 @@ void loop(void)
     }
 
     checkTimeMinutes();
+    checkTemperature(time);
 
     if (runningProgram != -1 || isRunningManual)
       checkTimeSeconds();
@@ -1671,6 +1756,7 @@ void loadConfig(void) {
     config.rainBlackoutMultiplier = 3;
     set(config.chip_type, "AP");
     config.use_rain = 1;
+    config.use_temp = 0;
 
     saveConfig();
   }
@@ -1694,6 +1780,7 @@ void loadConfig(void) {
 //  Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
 //  Serial.printf("chip_type %s\n", config.chip_type);
 //  Serial.printf("use_rain %d\n", config.use_rain);
+//  Serial.printf("use_temp %d\n", config.use_temp);
 }
 
 
@@ -1879,6 +1966,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
       
         // send the current state
         printName();
+        printCurrentTemperature();
         printModeState(false);
         printRainState(false);
         printWatering(false);
@@ -1932,6 +2020,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         sprintf(json+strlen(json), ",\"rainBlackoutMultiplier\":\"%d\"", config.rainBlackoutMultiplier);        
         sprintf(json+strlen(json), ",\"chip_type\":\"%s\"", config.chip_type);
         sprintf(json+strlen(json), ",\"use_rain\":\"%d\"", config.use_rain);
+        sprintf(json+strlen(json), ",\"use_temp\":\"%d\"", config.use_temp);
         strcpy(json+strlen(json), "}");
 //        Serial.printf("len %d\n", strlen(json));
         webSocket.sendTXT(setupClient, json, strlen(json));
@@ -2106,6 +2195,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           ptr = strstr((char *)payload, target) + strlen(target)+3;
           config.use_rain = strtol(ptr, &ptr, 10);
 
+          target = "use_temp";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          config.use_temp = strtol(ptr, &ptr, 10);
+
 //    Serial.printf("host_name %s\n", config.host_name);
 //    Serial.printf("use_mqtt %d\n", config.use_mqtt);
 //    Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
@@ -2118,6 +2211,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
 //    Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
 //    Serial.printf("chip_type %s\n", config.chip_type);
 //    Serial.printf("use_rain %d\n", config.use_rain);
+//    Serial.printf("use_temp %d\n", config.use_temp);
           saveConfig();
         }
       }
@@ -2186,6 +2280,33 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         }
       }
       break;
+  }
+}
+
+
+void printCurrentTemperature() {
+  if (!config.use_temp) {
+    return;
+  }
+  if (lastTemp < 0) {
+    return;
+  }
+  
+  char buf[7];
+  dtostrf(lastTemp, 4, 1, buf);
+
+  lcd.setCursor(8,0);
+  lcd.print(buf);
+
+  if (webClient != -1) {
+    sendWeb("currentTemp", buf);  
+  }
+  
+  // mqtt
+  if (config.use_mqtt) {
+    char topic[20];
+    sprintf(topic, "%s/temperature", config.host_name);
+    client.publish(topic, buf);
   }
 }
 
