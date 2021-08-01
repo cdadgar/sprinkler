@@ -2304,7 +2304,7 @@ void printCurrentTemperature() {
   
   // mqtt
   if (config.use_mqtt) {
-    char topic[20];
+    char topic[30];
     sprintf(topic, "%s/temperature", config.host_name);
     client.publish(topic, buf);
   }
