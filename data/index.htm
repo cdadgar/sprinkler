@@ -15,12 +15,23 @@ $(document).ready(function(){
 function message(msg){
 console.log('onmessage ' + msg.data);
   var obj = JSON.parse(msg.data);
-  if (obj.command == 'mode')
+  if (obj.command == 'zone') {
+    // build the manual dialog
+	//console.log(obj.value);
+	var zones = $('#azone');
+	for (var i=0; i < obj.value.length; ++i) {
+	  var str = "<option value='"+i+"'>" + (i+1) + ": " + obj.value[i] + "</option>";
+	  zones.append(str);
+	}
+  }
+  else if (obj.command == 'mode')
     $('#' + obj.command + obj.value).prop('checked', true).button('refresh');
   else {
     $('#' + obj.command).html(obj.value);
   }
 }
+
+var dialog, form;
 
 function initGui(){
   if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent))
@@ -74,6 +85,40 @@ function initGui(){
   $('#test').button().click(function(event) {
     window.location.href='./test.htm';
   });
+  
+
+  dialog = $( "#dialog-form" ).dialog({
+	autoOpen: false,
+	position: [0,0],
+	height: 230,
+	width: 300,
+	modal: true,
+	buttons: {
+	  "Run": runZone,
+	  Cancel: function() {
+	    dialog.dialog( "close" );
+	  }
+	}
+  });
+
+  form = dialog.find( "form" ).on( "submit", function( event ) {
+    event.preventDefault();
+    runZone();
+  });
+
+  $('#run_zone').button().click(function(event) {
+    dialog.dialog( "open" );
+  });
+}  
+
+function runZone() {
+  dialog.dialog( "close" );
+  var json = {
+    command: 'runZone',
+	zone: $('#azone').val(),
+	duration: $('#duration').val()
+  };
+  socket.send(JSON.stringify(json));
 }
 </script>
 </head>
@@ -96,8 +141,9 @@ function initGui(){
   <br>
   <button id='next'>Next</button>
   <button id='prev'>Prev</button>
+  <button id='run_zone'>Manual</button>
   <br><br>
-  <button id='manual'>Manual</button>
+  <button id='manual'>Start</button>
   <button id='prog'>Program</button>
   <br><br>
   <button id='zone'>Zone</button>
@@ -105,4 +151,31 @@ function initGui(){
   <button id='test'>Test</button>
 </div>
 </body>
+
+<div id="dialog-form" title="Run Zone">
+  <form>
+    <fieldset>
+      <label for="azone">Zone</label>
+      <select name="azone" id="azone">
+	  </select>
+	  <br>
+      <label for="duration">Duration</label>
+      <select name="duration" id="duration" >
+		<option value='1'>1</option>
+		<option value='2'>2</option>
+		<option value='3'>3</option>
+		<option value='4'>4</option>
+		<option value='5'>5</option>
+		<option value='6'>6</option>
+		<option value='7'>7</option>
+		<option value='8'>8</option>
+		<option value='9'>9</option>
+		<option value='10'>10</option>
+		<option value='15'>15</option>
+		<option value='20'>20</option>
+		<option value='25'>25</option>
+		<option value='30'>30</option>
+	  </select>
+  </form>
+</div>
 </html>

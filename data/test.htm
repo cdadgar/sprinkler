@@ -17,7 +17,9 @@ $(document).ready(function(){
 function message(msg){
   console.log('onmessage ' + msg.data);
   var obj = JSON.parse(msg.data);
-  if (obj.msg != undefined) {
+  if (obj.command == 'display')
+    $('#' + obj.command + obj.value).prop('checked', true).button('refresh');
+  else if (obj.msg != undefined) {
     $('#msg').html(obj.msg);
     $('#addr').val(obj.addr);
   }
@@ -32,6 +34,16 @@ function initGui(){
     document.body.style.zoom = '260%';
   else
     document.body.style.zoom = '120%';
+
+  $('#display').buttonset();
+  
+   $(':radio').click(function() {
+    var json = {
+      command: this.name,
+      value: this.value
+    };
+    socket.send(JSON.stringify(json));
+  });
 
   $('#send').button().click(function(event) {
     var json = {
@@ -62,7 +74,13 @@ function initGui(){
   <span id='val' class='ui-widget'></span><br>
   <br>
   <label for='heap'>Free Heap:</label>&nbsp;
-  <span id='heap' class='ui-widget'></span><br>
+  <span id='heap' class='ui-widget'></span><br><br>
+  <div id='display'>
+    <label for='display' class='ui-widget'>Display:</label>
+    <input type='radio' id='display0' name='display' value='0'><label for='display0'>Off</label>
+    <input type='radio' id='display1' name='display' value='1'><label for='display1'>On</label>
+  </div>
+  <br>
   <button id='send'>Send</button>
   <button id='cancel'>Cancel</button>
 </div>

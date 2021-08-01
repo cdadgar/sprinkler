@@ -1,9 +1,15 @@
 /*
  * module is a esp-1  (Generic ESP8266 Module)
  * flash size set to 1MB (FS:128KB OTA:~438KB)
+ * for a 4MB modified esp01 (new memory chip soldered onto it)
+ * flash size set to 4MB (FS:1MB OTA:~1019KB)
+ * 
+ * 
+ * (450780) 445 KB bin file was to large to OTA (got error: not enough space)
+
  * 
  * to program, slide switch to point nearest the button, then press the button
- * (the port montor should show some giberish.  it if shows normal debug output, the esp is running, and not in programing mode.
+ * (the port monitor should show some giberish.  it if shows normal debug output, the esp is running, and not in programing mode.
  * 
  * slide switch farthest away from button to go into run mode.
  * 
@@ -344,6 +350,7 @@ zoneType zone[NUM_ZONES];
 
 int runningProgram;
 int runningZone;
+bool isRunningManual;
 int remainingZoneMinutes;
 int remainingZoneSeconds;
 bool isName;
@@ -448,8 +455,8 @@ void rainChange(void);
 void logRainState(void);
 void logAction(char action);
 void logZone(int zone, int duration, char action, int percentage);
-void requestZimmermanAdjust(void);
-void requestZimmermanAdjustNow(void);
+//void requestZimmermanAdjust(void);
+//void requestZimmermanAdjustNow(void);
 
 
 void setup() {
@@ -505,6 +512,7 @@ void setup() {
   rainTime = 0;
   runningProgram = -1;
   runningZone = -1;
+  isRunningManual = false;
   remainingZoneMinutes = 0;
   remainingZoneSeconds = 0;
   isName = false;
@@ -553,9 +561,9 @@ all zones use the rain sensor except for the pool drip
   zone[8].usesPump = false;
   zone[9].usesPump = false;
   
-  for (int i=0; i < NUM_ZONES; ++i)
-    Serial.printf("zone %d: %s %d %d\n", i, zone[i].name,
-      zone[i].usesRainSensor, zone[i].usesPump);
+//  for (int i=0; i < NUM_ZONES; ++i)
+//    Serial.printf("zone %d: %s %d %d\n", i, zone[i].name,
+//      zone[i].usesRainSensor, zone[i].usesPump);
 
   saveZoneConfig(); 
 }
@@ -699,7 +707,7 @@ void setupTime(void) {
     
       TimeChangeRule *tcr;
       time_t local = myTZ.toLocal(utc, &tcr);
-      Serial.printf("\ntime zone %s\n", tcr->abbrev);
+//      Serial.printf("\ntime zone %s\n", tcr->abbrev);
     
       setTime(local);
     
@@ -808,7 +816,7 @@ void printModeState(bool isDisplay) {
     msg = "Manual      ";
   else if (config.mode == OFF)
     msg = "Off         ";
-  else if (runningProgram == -1)
+  else if (runningProgram == -1 && !isRunningManual)
     msg = "Running     ";
   else
     msg = "Watering    ";
@@ -842,7 +850,7 @@ void loop(void)
 
     checkTimeMinutes();
 
-    if (runningProgram != -1)
+    if (runningProgram != -1 || isRunningManual)
       checkTimeSeconds();
 
     // flash the time if its not set
@@ -967,14 +975,13 @@ void rainChange(void) {
 
 void checkRemainingWatering(void) {
   // called every second
-  if (runningProgram == -1)
-    return;
-
-  if (--remainingZoneSeconds < 0) {
-    remainingZoneSeconds = 59;
-    --remainingZoneMinutes;
-    if (remainingZoneMinutes < 0)
-      startNextZone();
+  if (runningProgram != -1 || isRunningManual) {
+    if (--remainingZoneSeconds < 0) {
+      remainingZoneSeconds = 59;
+      --remainingZoneMinutes;
+      if (remainingZoneMinutes < 0)
+        startNextZone();
+    }
   }
 }
 
@@ -1010,7 +1017,7 @@ void checkButtons(void) {
       testHeap = heap;
       char json[128];
       sprintf(json, "{\"command\":\"read\",\"value\":\"%d\",\"heap\":\"%u\"}", value, heap);
-      Serial.printf("sending %s\n", json);
+//      Serial.printf("sending %s\n", json);
       webSocket.sendTXT(testClient, json, strlen(json));
     }
   }
@@ -1121,7 +1128,7 @@ void modeChange(bool isLocal) {
   saveConfig();
   if (config.mode == OFF) {
     // stop program if its running
-    if (runningProgram != -1 and !isManual) {
+    if ((runningProgram != -1 || isRunningManual) and !isManual) {
       stopCurrentZone();
       stopProgram();
     }
@@ -1217,6 +1224,13 @@ void displayBacklight(bool isOn) {
     lcd.backlight();
   else
     lcd.noBacklight();
+
+  if (testClient != -1) {
+      char json[128];
+      sprintf(json, "{\"command\":\"display\",\"value\":\"%d\"}", ((isOn) ? 1 : 0));
+//      Serial.printf("sending %s\n", json);
+      webSocket.sendTXT(testClient, json, strlen(json));
+  }
 }
 
 
@@ -1233,12 +1247,18 @@ void clearWatering(void) {
 
 
 void printWatering(bool isDisplay) {
-  if (runningProgram == -1)
+  if (runningProgram == -1 && !isRunningManual)
     return;
     
   char buf[11];
-  sprintf(buf, "%d-%2d,%2d:%02d", runningProgram+1, runningZone+1,
-    remainingZoneMinutes, remainingZoneSeconds);
+  if (isRunningManual) {
+    sprintf(buf, "M-%2d,%2d:%02d", runningZone+1,
+      remainingZoneMinutes, remainingZoneSeconds);
+  }
+  else {
+    sprintf(buf, "%d-%2d,%2d:%02d", runningProgram+1, runningZone+1,
+      remainingZoneMinutes, remainingZoneSeconds);
+  }
   
   if (isDisplay) {
     lcd.setCursor(0,1);
@@ -1311,8 +1331,8 @@ void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
     sprintf(msg, "%s %s", buf, weekdayNames[dayOfWeek]); 
     if (webClient != -1)
       sendWeb("time", msg);
-    if (isTest)
-      Serial.printf("time is %s\n", msg);
+//    if (isTest)
+//      Serial.printf("time is %s\n", msg);
   }
 
   if (isCheckProgram) {
@@ -1330,8 +1350,8 @@ void pump(boolean isOn) {
   if (isOn)
     data ^=  pumpMask;
   send(pumpAddr, data);  
-  Serial.printf("pump, sending addr %d, value ", pumpAddr);
-  Serial.println(data, BIN);
+//  Serial.printf("pump, sending addr %d, value ", pumpAddr);
+//  Serial.println(data, BIN);
 }
 
 
@@ -1357,26 +1377,26 @@ void startProgram(int index) {
   programToStart = index;
   
   // adjust watering time if needed
-  if (config.use_zimmerman == 1 && programNeedsZimmerman(index)) {
-    Serial.println(F("use zimmerman"));
-    // should only need to make the wunderground call once when the program starts
-    requestZimmermanAdjust();
-//    Serial.println(F("TEST ZERO WATER ADJUST"));
-//    actual_water_adjust = 0;
-//    startProgramAfterAdjust();
-  }
-  else {
-    Serial.println(F("use % adjust"));
+//  if (config.use_zimmerman == 1 && programNeedsZimmerman(index)) {
+////    Serial.println(F("use zimmerman"));
+//    // should only need to make the wunderground call once when the program starts
+//    requestZimmermanAdjust();
+////    Serial.println(F("TEST ZERO WATER ADJUST"));
+////    actual_water_adjust = 0;
+////    startProgramAfterAdjust();
+//  }
+//  else {
+//    Serial.println(F("use % adjust"));
     actual_water_adjust = config.water_adjust;
     startProgramAfterAdjust();
-  }
+//  }
 }
 
 
 void startProgramAfterAdjust(void) {
   runningProgram = programToStart;
-  Serial.printf("starting program %d\n", (runningProgram+1));
-  Serial.printf("adjust water %d\n", actual_water_adjust);
+//  Serial.printf("starting program %d\n", (runningProgram+1));
+//  Serial.printf("adjust water %d\n", actual_water_adjust);
   runningZone = -1;
   startNextZone();
 }
@@ -1385,6 +1405,7 @@ void startProgramAfterAdjust(void) {
 void stopProgram(void) {
   runningProgram = -1;
   runningZone = -1;
+  isRunningManual = false;
   pump(false);
   clearWatering();
   isManual = false;
@@ -1398,16 +1419,16 @@ void startCurrentZone(void) {
     remainingZoneSeconds = 0;
 
     if (actual_water_adjust != 100) {
-      Serial.printf("from %d:%02d", remainingZoneMinutes, remainingZoneSeconds);
+//      Serial.printf("from %d:%02d", remainingZoneMinutes, remainingZoneSeconds);
       int i = remainingZoneMinutes * 60 * actual_water_adjust / 100;
       remainingZoneMinutes = i / 60;
       remainingZoneSeconds = i % 60;
-      Serial.printf(" to %d:%02d\n", remainingZoneMinutes, remainingZoneSeconds);
+//      Serial.printf(" to %d:%02d\n", remainingZoneMinutes, remainingZoneSeconds);
     }
     
     // skip if less than a minutes of runtime
     if (remainingZoneMinutes == 0) {
-      Serial.printf("skipped due to time\n");
+//      Serial.printf("skipped due to time\n");
       logZone(runningZone, 0, ZONE_WATERING, actual_water_adjust);
       remainingZoneSeconds = 0;
       return;
@@ -1419,9 +1440,14 @@ void startCurrentZone(void) {
       ++m;
     logZone(runningZone, m, ZONE_WATERING, actual_water_adjust);
   }
-  else {
-    // no program, so the zone must have been turned on manually
+  else if (!isRunningManual) {
+    // no program and not a manual zone, so the zone must have been turned on manually
+    // on the zones page
     logZone(runningZone, 0, ZONE_MANUAL, 100);
+    lcd.setCursor(0,1);
+    char buf[10];
+    sprintf(buf, "Zone %d ON", (runningZone+1));
+    lcd.print(buf);
   }
 
   // turn on the pump if this zone needs it, or off if it doesn't
@@ -1435,8 +1461,8 @@ void startCurrentZone(void) {
   if (isPumpOn && pumpAddr == zoneAddrs[runningZone])
     data ^= pumpMask;
   send(zoneAddrs[runningZone], data);
-  Serial.printf("start zone %d, sending addr %d, value ", runningZone, zoneAddrs[runningZone]);
-  Serial.println(data, BIN);
+//  Serial.printf("start zone %d, sending addr %d, value ", runningZone, zoneAddrs[runningZone]);
+//  Serial.println(data, BIN);
 
   isName = false;
   
@@ -1462,6 +1488,9 @@ void stopCurrentZone(void) {
     remainingZoneMinutes = 0;
     remainingZoneSeconds = 0;
     isName = false;
+
+    lcd.setCursor(0,1);
+    lcd.print("          ");
   }
 }
 
@@ -1469,6 +1498,16 @@ void stopCurrentZone(void) {
 void startNextZone(void) {
   stopCurrentZone();
 
+  if (isManual) {
+    isManual = false;
+    return;
+  }
+
+  if (isRunningManual) {
+    stopProgram();
+    return;
+  }
+  
   if (config.use_rain) {
     bool isRained = (getRainSensor() == RAIN_SENSOR_TRIGGERED);
     if (isRain != isRained) {
@@ -1492,8 +1531,8 @@ void startNextZone(void) {
           stopProgram();
           return;
         }
-        else
-          Serial.printf("starting program %d\n", (runningProgram+1));
+//        else
+//          Serial.printf("starting program %d\n", (runningProgram+1));
       }
       else {
         stopProgram();
@@ -1503,7 +1542,7 @@ void startNextZone(void) {
     
     if (program[runningProgram].isEnabled && program[runningProgram].duration[runningZone] > 0) {
       if (zone[runningZone].usesRainSensor && (isRain || (rainBlackoutTime > 0))) {
-        Serial.printf("skipping zone %d because of rain sensor\n", runningZone);
+//        Serial.printf("skipping zone %d because of rain sensor\n", runningZone);
         logZone(runningZone, 0, ZONE_SKIPPED, 100);
         continue;
       }
@@ -1541,8 +1580,8 @@ void startPreviousZone(void) {
           stopProgram();
           return;
         }
-        else
-          Serial.printf("starting program %d\n", (runningProgram+1));
+//        else
+//          Serial.printf("starting program %d\n", (runningProgram+1));
       }
       else {
         stopProgram();
@@ -1552,7 +1591,7 @@ void startPreviousZone(void) {
     
     if (program[runningProgram].isEnabled && program[runningProgram].duration[runningZone] > 0) {
       if (zone[runningZone].usesRainSensor && (isRain || (rainBlackoutTime > 0))) {
-        Serial.printf("skipping zone %d because of rain sensor\n", runningZone);
+//        Serial.printf("skipping zone %d because of rain sensor\n", runningZone);
         logZone(runningZone, 0, ZONE_SKIPPED, 100);
         continue;
       }
@@ -1612,13 +1651,13 @@ void set(char *name, const char *value) {
 void loadConfig(void) {
   int magicNum = EEPROM.read(MAGIC_NUM_ADDRESS);
   if (magicNum != MAGIC_NUM) {
-    Serial.println(F("invalid eeprom data"));
+//    Serial.println(F("invalid eeprom data"));
     isMemoryReset = true;
   }
   
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
-    Serial.println(F("using default config"));
+//    Serial.println(F("using default config"));
     set(config.host_name, HOST_NAME);
     set(config.mqtt_ip_addr, MQTT_IP_ADDR);
     config.mqtt_ip_port = MQTT_IP_PORT;
@@ -1642,30 +1681,30 @@ void loadConfig(void) {
       *ptr = EEPROM.read(addr++);
   }
 
-  Serial.printf("host_name %s\n", config.host_name);
-  Serial.printf("use_mqtt %d\n", config.use_mqtt);
-  Serial.printf("mqqt_ip_addr %s\n", config.mqtt_ip_addr);
-  Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
-  Serial.printf("mode %d\n", config.mode);
-  Serial.printf("display_timeout %d\n", config.display_timeout);
-  Serial.printf("water_adjust %d\n", config.water_adjust);
-  Serial.printf("use_zimmerman %d\n", config.use_zimmerman);
-  Serial.printf("wu_key %s\n", config.wu_key);
-  Serial.printf("wu_location %s\n", config.wu_location);
-  Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
-  Serial.printf("chip_type %s\n", config.chip_type);
-  Serial.printf("use_rain %d\n", config.use_rain);
+//  Serial.printf("host_name %s\n", config.host_name);
+//  Serial.printf("use_mqtt %d\n", config.use_mqtt);
+//  Serial.printf("mqqt_ip_addr %s\n", config.mqtt_ip_addr);
+//  Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
+//  Serial.printf("mode %d\n", config.mode);
+//  Serial.printf("display_timeout %d\n", config.display_timeout);
+//  Serial.printf("water_adjust %d\n", config.water_adjust);
+//  Serial.printf("use_zimmerman %d\n", config.use_zimmerman);
+//  Serial.printf("wu_key %s\n", config.wu_key);
+//  Serial.printf("wu_location %s\n", config.wu_location);
+//  Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
+//  Serial.printf("chip_type %s\n", config.chip_type);
+//  Serial.printf("use_rain %d\n", config.use_rain);
 }
 
 
 void loadProgramConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
-    Serial.printf("using default programs\n");
+//    Serial.printf("using default programs\n");
     initProgram();  
   }
   else {
-    Serial.printf("loading programs from eeprom\n");
+//    Serial.printf("loading programs from eeprom\n");
     int addr = PROGRAM_ADDRESS;
     byte *ptr = (byte *)&program;
     for (int i = 0; i < sizeof(program); ++i, ++ptr, ++addr)
@@ -1677,11 +1716,11 @@ void loadProgramConfig(void) {
 void loadZoneConfig(void) {
   if (isMemoryReset) {
     // nothing saved in eeprom, use defaults
-    Serial.printf("using default zones\n");
+//    Serial.printf("using default zones\n");
     initZone();
   }
   else {
-    Serial.printf("loading zones from eeprom\n");
+//    Serial.printf("loading zones from eeprom\n");
     int addr = ZONE_ADDRESS;
     byte *ptr = (byte *)&zone;
     for (int i = 0; i < sizeof(zone); ++i, ++ptr, ++addr)
@@ -1738,43 +1777,43 @@ void setupOta(void) {
     }
 
     // NOTE: if updating FS this would be the place to unmount FS using FS.end()
-    Serial.println("Start updating " + type);
+//    Serial.println("Start updating " + type);
   });
   
   ArduinoOTA.onEnd([]() {
-    Serial.println("\nEnd");
+//    Serial.println("\nEnd");
   });
   
   ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+//    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
   });
   
   ArduinoOTA.onError([](ota_error_t error) {
-    Serial.printf("Error[%u]: ", error);
-    const char *msg = "Unknown Error";
-    if (error == OTA_AUTH_ERROR) {
-      msg = "Auth Failed";
-    } else if (error == OTA_BEGIN_ERROR) {
-      msg = "Begin Failed";
-    } else if (error == OTA_CONNECT_ERROR) {
-      msg = "Connect Failed";
-    } else if (error == OTA_RECEIVE_ERROR) {
-      msg = "Receive Failed";
-    } else if (error == OTA_END_ERROR) {
-      msg = "End Failed";
-    }
-    Serial.println(msg);
+//    Serial.printf("Error[%u]: ", error);
+//    const char *msg = "Unknown Error";
+//    if (error == OTA_AUTH_ERROR) {
+//      msg = "Auth Failed";
+//    } else if (error == OTA_BEGIN_ERROR) {
+//      msg = "Begin Failed";
+//    } else if (error == OTA_CONNECT_ERROR) {
+//      msg = "Connect Failed";
+//    } else if (error == OTA_RECEIVE_ERROR) {
+//      msg = "Receive Failed";
+//    } else if (error == OTA_END_ERROR) {
+//      msg = "End Failed";
+//    }
+//    Serial.println(msg);
   });
   
   ArduinoOTA.begin();
-  Serial.println("Arduino OTA ready");
+//  Serial.println("Arduino OTA ready");
 
   char host[20];
   sprintf(host, "%s-webupdate", config.host_name);
   MDNS.begin(host);
   httpUpdater.setup(&server);
   MDNS.addService("http", "tcp", 80);
-  Serial.println("Web OTA ready");
+//  Serial.println("Web OTA ready");
 }
 
 
@@ -1786,7 +1825,7 @@ void setupMqtt() {
 
 void saveProgramConfig(void) {
   isPromModified = false;
-  Serial.printf("saving programs to eeprom\n");
+//  Serial.printf("saving programs to eeprom\n");
   int addr = PROGRAM_ADDRESS;
   byte *ptr = (byte *)&program;
   for (int i = 0; i < sizeof(program); ++i, ++ptr, ++addr)
@@ -1799,7 +1838,7 @@ void saveProgramConfig(void) {
 
 void saveZoneConfig(void) {
   isPromModified = false;
-  Serial.printf("saving zones to eeprom\n");
+//  Serial.printf("saving zones to eeprom\n");
   int addr = ZONE_ADDRESS;
   byte *ptr = (byte *)&zone;
   for (int i = 0; i < sizeof(zone); ++i, ++ptr, ++addr)
@@ -1813,7 +1852,7 @@ void saveZoneConfig(void) {
 void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght) {
   switch(type) {
     case WStype_DISCONNECTED:
-      Serial.printf("[%u] Disconnected!\n", num);
+//      Serial.printf("[%u] Disconnected!\n", num);
       if (num == webClient)
         webClient = -1;
       else if (num == programClient)
@@ -1832,7 +1871,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
     case WStype_CONNECTED:
       {
         IPAddress ip = webSocket.remoteIP(num);
-        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
+//        Serial.printf("[%u] Connected from %d.%d.%d.%d url: %s\n", num, ip[0], ip[1], ip[2], ip[3], payload);
       }
       
       if (strcmp((char *)payload,"/") == 0) {
@@ -1844,6 +1883,14 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         printRainState(false);
         printWatering(false);
         printTime(false, false, false);
+
+        // send zones
+        char json[265];
+        strcpy(json, "{\"command\":\"zone\",\"value\":[");
+        for (int i=0; i < NUM_ZONES; ++i)
+          sprintf(json+strlen(json), "%s[\"%s\"]", (i==0)?"":",", zone[i].name);
+        strcpy(json+strlen(json), "]}");
+        webSocket.sendTXT(webClient, json, strlen(json));
      }
       else if (strcmp((char *)payload,"/program") == 0) {
         programClient = num;
@@ -1894,8 +1941,10 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         testAddr = MUX1;
 
         // send the addessses of the muxes we are using
+        // send the display state
         char json[128];
-        sprintf(json, "{\"msg\":\"MUXes at %d and %d\",\"addr\":\"%d\"}", MUX1, MUX2, MUX1);
+        sprintf(json, "{\"msg\":\"MUXes at %d and %d\",\"addr\":\"%d\",\"display\":\"%d\"}",
+          MUX1, MUX2, MUX1, ((isDisplayOn) ? 1 : 0));
 //        Serial.printf("len %d\n", strlen(json));
         webSocket.sendTXT(testClient, json, strlen(json));
       }
@@ -1904,7 +1953,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         
         // send zones
         char json[265];
-        strcpy(json, "{\"command\":\"zone\",\"value\":[");
+        sprintf(json, "{\"command\":\"zone\",\"runningZone\":%d,\"value\":[", runningZone);
         for (int i=0; i < NUM_ZONES; ++i)
           sprintf(json+strlen(json), "%s[\"%s\",%d,%d]", (i==0)?"":",",
             zone[i].name, zone[i].usesRainSensor, zone[i].usesPump);
@@ -1913,11 +1962,11 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         webSocket.sendTXT(zoneClient, json, strlen(json));
       }
       else {
-        Serial.printf("unknown call %s\n", payload);
+//        Serial.printf("unknown call %s\n", payload);
       }
       break;
     case WStype_TEXT:
-      Serial.printf("[%u] get Text: %s\n", num, payload);
+//      Serial.printf("[%u] get Text: %s\n", num, payload);
       
       if (num == webClient) {
         const char *target = "command";
@@ -1932,16 +1981,31 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         else if (strncmp(ptr,"prev",4) == 0) {
           if (isManual)
             startPreviousZone();
-        }        
+        }
         else if (strncmp(ptr,"mode",4) == 0) {
           target = "value";
           ptr = strstr(ptr, target) + strlen(target)+3;
           config.mode = strtol(ptr, &ptr, 10);
           modeChange(false);
         }
+        else if (strncmp(ptr,"runZone",7) == 0) {
+          target = "zone";
+          ptr = strstr(ptr, target) + strlen(target)+3;
+          int zone = strtol(ptr, &ptr, 10);
+          target = "duration";
+          ptr = strstr(ptr, target) + strlen(target)+3;
+          int duration = strtol(ptr, &ptr, 10);
+
+          isRunningManual = true;
+          runningZone = zone;
+          remainingZoneMinutes = duration;
+          remainingZoneSeconds = 0;
+          actual_water_adjust = 100;
+          startCurrentZone();
+        }
       }
       else if (num == programClient) {
-        Serial.printf("save programs\n");
+//        Serial.printf("save programs\n");
         char *ptr = strchr((char *)payload, '[')+2;
         for (int i=0; i < NUM_PROGRAMS; ++i) {
           program[i].isEnabled = strtol(ptr, &ptr, 10);
@@ -1982,7 +2046,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           logRainState();
         }
         else if (strncmp(ptr,"save",4) == 0) {
-          Serial.printf("save setup\n");
+//          Serial.printf("save setup\n");
           
           const char *target = "host_name";
           char *ptr = strstr((char *)payload, target) + strlen(target)+3;
@@ -2042,38 +2106,55 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           ptr = strstr((char *)payload, target) + strlen(target)+3;
           config.use_rain = strtol(ptr, &ptr, 10);
 
-    Serial.printf("host_name %s\n", config.host_name);
-    Serial.printf("use_mqtt %d\n", config.use_mqtt);
-    Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
-    Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
-    Serial.printf("display_timeout %d\n", config.display_timeout);
-    Serial.printf("water_adjust %d\n", config.water_adjust);
-    Serial.printf("use_zimmerman %d\n", config.use_zimmerman);
-    Serial.printf("wu_key %s\n", config.wu_key);
-    Serial.printf("wu_location %s\n", config.wu_location);
-    Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
-    Serial.printf("chip_type %s\n", config.chip_type);
-    Serial.printf("use_rain %d\n", config.use_rain);
+//    Serial.printf("host_name %s\n", config.host_name);
+//    Serial.printf("use_mqtt %d\n", config.use_mqtt);
+//    Serial.printf("mqtt_ip_addr %s\n", config.mqtt_ip_addr);
+//    Serial.printf("mqtt_ip_port %d\n", config.mqtt_ip_port);
+//    Serial.printf("display_timeout %d\n", config.display_timeout);
+//    Serial.printf("water_adjust %d\n", config.water_adjust);
+//    Serial.printf("use_zimmerman %d\n", config.use_zimmerman);
+//    Serial.printf("wu_key %s\n", config.wu_key);
+//    Serial.printf("wu_location %s\n", config.wu_location);
+//    Serial.printf("rainBlackoutMultiplier %d\n", config.rainBlackoutMultiplier);
+//    Serial.printf("chip_type %s\n", config.chip_type);
+//    Serial.printf("use_rain %d\n", config.use_rain);
           saveConfig();
         }
       }
       else if (num == testClient) {
-        Serial.printf("test %s\n", payload);
-        const char *target = "addr";
+//        Serial.printf("test %s\n", payload);
+
+        const char *target = "command";
         char *ptr = strstr((char *)payload, target) + strlen(target)+3;
-        int addr = strtol(ptr, &ptr, 10);
-        target = "value";
-        ptr = strstr(ptr, target) + strlen(target)+3;
-        int value = strtol(ptr, &ptr, 10);
-        Serial.printf("%d %d\n", addr, value);
-        send(addr, value);
-        testAddr = addr;
+        if (strncmp(ptr,"send",4) == 0) {
+          target = "addr";
+          ptr = strstr((char *)payload, target) + strlen(target)+3;
+          int addr = strtol(ptr, &ptr, 10);
+          target = "value";
+          ptr = strstr(ptr, target) + strlen(target)+3;
+          int value = strtol(ptr, &ptr, 10);
+//          Serial.printf("mux %d %d\n", addr, value);
+          send(addr, value);
+          testAddr = addr;
+        }
+        else if (strncmp(ptr,"display",6) == 0) {
+          target = "value";
+          ptr = strstr(ptr, target) + strlen(target)+3;
+          int value = strtol(ptr, &ptr, 10);
+//          Serial.printf("display %d\n", value);
+          if (value == 1) {
+            // pretend like we pressed a button, otherwise the backlight will
+            // turn off right away
+            lastButtonPressTime = millis();
+          }
+          displayBacklight(value == 1);
+        }
       }
       else if (num == zoneClient) {
         const char *target = "command";
         char *ptr = strstr((char *)payload, target) + strlen(target)+3;
         if (strncmp(ptr,"saveZone",8) == 0) {
-          Serial.printf("save zones\n");
+//          Serial.printf("save zones\n");
           char *ptr = strchr((char *)payload, '[')+3;
           for (int i=0; i < NUM_ZONES; ++i) {
             char *end = strchr(ptr, '\"');
@@ -2082,7 +2163,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
             zone[i].usesRainSensor = (strtol(end+2, &ptr, 10) == 1);
             zone[i].usesPump = (strtol(ptr+1, &ptr, 10) == 1);
             ptr += 4;
-            Serial.printf("'%s' '%d' '%d'\n", zone[i].name, zone[i].usesRainSensor, zone[i].usesPump);
+//            Serial.printf("'%s' '%d' '%d'\n", zone[i].name, zone[i].usesRainSensor, zone[i].usesPump);
           }      
           saveZoneConfig();
         }
@@ -2090,7 +2171,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           target = "value";
           ptr = strstr(ptr, target) + strlen(target)+3;
           int id = strtol(ptr, &ptr, 10);
-          Serial.printf("on zone %d\n", id);
+//          Serial.printf("on zone %d\n", id);
           runningZone = id;
           startCurrentZone();
         }
@@ -2098,7 +2179,7 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           target = "value";
           ptr = strstr(ptr, target) + strlen(target)+3;
           int id = strtol(ptr, &ptr, 10);
-          Serial.printf("off zone %d\n", id);
+//          Serial.printf("off zone %d\n", id);
           // this actually stops everything, regardless of the zone
           stopCurrentZone();
           stopProgram();
@@ -2147,107 +2228,107 @@ void logAction(char action) {
 #define max(a,b) ((a)>(b)?(a):(b))
 #define min(a,b) ((a)<(b)?(a):(b))
 
-#define NUM_ZIMMERMAN_FIELDS 6
-enum zimmerFields { precip_today_in, maxtempi, mintempi, maxhumidity, minhumidity, precipi };
-const char *zimmerFieldNames[] = { "\"precip_today_in\":", "\"maxtempi\":", "\"mintempi\":", "\"maxhumidity\":", "\"minhumidity\":", "\"precipi\":" };
-float zimmermanField[ NUM_ZIMMERMAN_FIELDS ];
-int zimmermanNumGot;
+//#define NUM_ZIMMERMAN_FIELDS 6
+//enum zimmerFields { precip_today_in, maxtempi, mintempi, maxhumidity, minhumidity, precipi };
+//const char *zimmerFieldNames[] = { "\"precip_today_in\":", "\"maxtempi\":", "\"mintempi\":", "\"maxhumidity\":", "\"minhumidity\":", "\"precipi\":" };
+//float zimmermanField[ NUM_ZIMMERMAN_FIELDS ];
+//int zimmermanNumGot;
 
 // precipi is not unique in the response
 
-void requestZimmermanAdjust(void) {
-  actual_water_adjust = DEFAULT_ADJUST;
-  requestZimmermanAdjustNow();
-}
-
-
-void requestZimmermanAdjustNow(void) {
-  for (int i=0; i < NUM_ZIMMERMAN_FIELDS; ++i) {
-    zimmermanField[i] = -1;
-  }
-  zimmermanNumGot = 0;
-  
-  AsyncClient* aclient = new AsyncClient();
-      
-  aclient->onConnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onConnect\n");
-    // after connecting, send the request, and wait for a reply
-    // Make an HTTP GET request
-    c->write(WUNDERGROUND_REQ1);
-    c->write(config.wu_key);
-    c->write(WUNDERGROUND_REQ2);
-    c->write(config.wu_location);
-    c->write(WUNDERGROUND_REQ3);
-  }, NULL);
-
-  aclient->onDisconnect([](void *obj, AsyncClient* c) {
-//    Serial.printf("[A-TCP] onDisconnect\n");
-    free(c);
-  }, NULL);
-
-  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
-//    Serial.printf("requestOutsideTemperature [A-TCP] onError: %s\n", c->errorToString(err));
-  }, NULL);
-
-  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
-//    Serial.printf("[A-TCP] onData: %s\n", buf);
-
-  // the response back is huge (30Kb), and we only need the data at the end
-  // so skip lines until we get to the dailysummary
-  // we need these parmeters from the conditions, so pull them out without
-  // parsing the huge response
-
-    // search for the fields in the response
-    for (int i=0; i < NUM_ZIMMERMAN_FIELDS; ++i) {
-      if (zimmermanField[i] == -1) {
-        const char *target = zimmerFieldNames[i];
-//        Serial.print("looking for: ");
-//        Serial.println(target);
-        char *ptr = strstr((char *)buf, target);
-        if (ptr != NULL) {
-          ptr += strlen(target)+1;
-          zimmermanField[i] = strtod(ptr, &ptr);
-          if (zimmermanField[i] == -9999.0)
-            zimmermanField[i] = -1;
-          else {
-            Serial.print(target);
-            Serial.println(zimmermanField[i]);
-            ++zimmermanNumGot;
-          }
-        }
-      }
-    }
-
-    if (zimmermanNumGot == NUM_ZIMMERMAN_FIELDS) {
-      const int humidity = ( zimmermanField[maxhumidity] + zimmermanField[minhumidity] ) / 2;
-      Serial.print(F("humidity: "));  Serial.println(humidity);
-      const float precip = zimmermanField[precip_today_in] + zimmermanField[precipi];
-      Serial.print(F("precip: "));  Serial.println(precip);
-      int temp = ( ( zimmermanField[maxtempi] + zimmermanField[mintempi] ) / 2 ); 
-      Serial.print(F("temp: "));  Serial.println(temp);
-      int humidityFactor = ( 30 - humidity );
-      Serial.print(F("humidityFactor: "));  Serial.println(humidityFactor);
-      int tempFactor = ( ( temp - 70 ) * 4 );
-      Serial.print(F("tempFactor: "));  Serial.println(tempFactor);
-      int precipFactor = ( precip * -200 );  
-      Serial.print(F("precipFactor: "));  Serial.println(precipFactor);
-      
-      int percent = 100 + humidityFactor + tempFactor + precipFactor; 
-      int value = min(max(0,percent), 200);
-      Serial.print(F("zimmerman value: "));  Serial.println(value);
-
-      actual_water_adjust = value;
-      startProgramAfterAdjust();
-      c->close(true);  // close right now...no more onData
-    }
-  }, NULL);
-  
-//  Serial.printf("request temp\n");
-  if (!aclient->connect(WUNDERGROUND, 80)) {
-    free(aclient);
-    startProgramAfterAdjust();
-  }
-}
+//void requestZimmermanAdjust(void) {
+//  actual_water_adjust = DEFAULT_ADJUST;
+//  requestZimmermanAdjustNow();
+//}
+//
+//
+//void requestZimmermanAdjustNow(void) {
+//  for (int i=0; i < NUM_ZIMMERMAN_FIELDS; ++i) {
+//    zimmermanField[i] = -1;
+//  }
+//  zimmermanNumGot = 0;
+//  
+//  AsyncClient* aclient = new AsyncClient();
+//      
+//  aclient->onConnect([](void *obj, AsyncClient* c) {
+////    Serial.printf("[A-TCP] onConnect\n");
+//    // after connecting, send the request, and wait for a reply
+//    // Make an HTTP GET request
+//    c->write(WUNDERGROUND_REQ1);
+//    c->write(config.wu_key);
+//    c->write(WUNDERGROUND_REQ2);
+//    c->write(config.wu_location);
+//    c->write(WUNDERGROUND_REQ3);
+//  }, NULL);
+//
+//  aclient->onDisconnect([](void *obj, AsyncClient* c) {
+////    Serial.printf("[A-TCP] onDisconnect\n");
+//    free(c);
+//  }, NULL);
+//
+//  aclient->onError([](void *obj, AsyncClient* c, int8_t err) {
+////    Serial.printf("requestOutsideTemperature [A-TCP] onError: %s\n", c->errorToString(err));
+//  }, NULL);
+//
+//  aclient->onData([](void *obj, AsyncClient* c, void *buf, size_t len) {
+////    Serial.printf("[A-TCP] onData: %s\n", buf);
+//
+//  // the response back is huge (30Kb), and we only need the data at the end
+//  // so skip lines until we get to the dailysummary
+//  // we need these parmeters from the conditions, so pull them out without
+//  // parsing the huge response
+//
+//    // search for the fields in the response
+//    for (int i=0; i < NUM_ZIMMERMAN_FIELDS; ++i) {
+//      if (zimmermanField[i] == -1) {
+//        const char *target = zimmerFieldNames[i];
+////        Serial.print("looking for: ");
+////        Serial.println(target);
+//        char *ptr = strstr((char *)buf, target);
+//        if (ptr != NULL) {
+//          ptr += strlen(target)+1;
+//          zimmermanField[i] = strtod(ptr, &ptr);
+//          if (zimmermanField[i] == -9999.0)
+//            zimmermanField[i] = -1;
+//          else {
+////            Serial.print(target);
+////            Serial.println(zimmermanField[i]);
+//            ++zimmermanNumGot;
+//          }
+//        }
+//      }
+//    }
+//
+//    if (zimmermanNumGot == NUM_ZIMMERMAN_FIELDS) {
+//      const int humidity = ( zimmermanField[maxhumidity] + zimmermanField[minhumidity] ) / 2;
+////      Serial.print(F("humidity: "));  Serial.println(humidity);
+//      const float precip = zimmermanField[precip_today_in] + zimmermanField[precipi];
+////      Serial.print(F("precip: "));  Serial.println(precip);
+//      int temp = ( ( zimmermanField[maxtempi] + zimmermanField[mintempi] ) / 2 ); 
+////      Serial.print(F("temp: "));  Serial.println(temp);
+//      int humidityFactor = ( 30 - humidity );
+////      Serial.print(F("humidityFactor: "));  Serial.println(humidityFactor);
+//      int tempFactor = ( ( temp - 70 ) * 4 );
+////      Serial.print(F("tempFactor: "));  Serial.println(tempFactor);
+//      int precipFactor = ( precip * -200 );  
+////      Serial.print(F("precipFactor: "));  Serial.println(precipFactor);
+//      
+//      int percent = 100 + humidityFactor + tempFactor + precipFactor; 
+//      int value = min(max(0,percent), 200);
+////      Serial.print(F("zimmerman value: "));  Serial.println(value);
+//
+//      actual_water_adjust = value;
+//      startProgramAfterAdjust();
+//      c->close(true);  // close right now...no more onData
+//    }
+//  }, NULL);
+//  
+////  Serial.printf("request temp\n");
+//  if (!aclient->connect(WUNDERGROUND, 80)) {
+//    free(aclient);
+//    startProgramAfterAdjust();
+//  }
+//}
 
 
 //format bytes
@@ -2283,7 +2364,7 @@ String getContentType(String filename){
 
 
 bool handleFileRead(String path){
-  Serial.println("handleFileRead: " + path);
+//  Serial.println("handleFileRead: " + path);
   if(path.endsWith("/")) path += "index.htm";
   String contentType = getContentType(path);
   String pathWithGz = path + ".gz";
@@ -2304,7 +2385,7 @@ void handleFileUpload_edit(){
   if(upload.status == UPLOAD_FILE_START){
     String filename = upload.filename;
     if(!filename.startsWith("/")) filename = "/"+filename;
-    Serial.print("handleFileUpload Name: "); Serial.println(filename);
+//    Serial.print("handleFileUpload Name: "); Serial.println(filename);
     fsUploadFile = SPIFFS.open(filename, "w");
     filename = String();
   } else if(upload.status == UPLOAD_FILE_WRITE){
@@ -2314,7 +2395,7 @@ void handleFileUpload_edit(){
   } else if(upload.status == UPLOAD_FILE_END){
     if(fsUploadFile)
       fsUploadFile.close();
-    Serial.print("handleFileUpload Size: "); Serial.println(upload.totalSize);
+//    Serial.print("handleFileUpload Size: "); Serial.println(upload.totalSize);
   }
 }
 
@@ -2322,7 +2403,7 @@ void handleFileUpload_edit(){
 void handleFileDelete(){
   if(server.args() == 0) return server.send(500, "text/plain", "BAD ARGS");
   String path = server.arg(0);
-  Serial.println("handleFileDelete: " + path);
+//  Serial.println("handleFileDelete: " + path);
   if(path == "/")
     return server.send(500, "text/plain", "BAD PATH");
   if(!SPIFFS.exists(path))
@@ -2337,7 +2418,7 @@ void handleFileCreate(){
   if(server.args() == 0)
     return server.send(500, "text/plain", "BAD ARGS");
   String path = server.arg(0);
-  Serial.println("handleFileCreate: " + path);
+//  Serial.println("handleFileCreate: " + path);
   if(path == "/")
     return server.send(500, "text/plain", "BAD PATH");
   if(SPIFFS.exists(path))
@@ -2356,7 +2437,7 @@ void handleFileList() {
   if(!server.hasArg("dir")) {server.send(500, "text/plain", "BAD ARGS"); return;}
   
   String path = server.arg("dir");
-  Serial.println("handleFileList: " + path);
+//  Serial.println("handleFileList: " + path);
   Dir dir = SPIFFS.openDir(path);
   path = String();
 
@@ -2387,9 +2468,9 @@ void countRootFiles(void) {
     String fileName = dir.fileName();
     size_t fileSize = dir.fileSize();
     totalSize += fileSize;
-    Serial.printf("FS File: %s, size: %s\n", fileName.c_str(), formatBytes(fileSize).c_str());
+//    Serial.printf("FS File: %s, size: %s\n", fileName.c_str(), formatBytes(fileSize).c_str());
   }
-  Serial.printf("FS File: serving %d files, size: %s from /\n", num, formatBytes(totalSize).c_str());
+//  Serial.printf("FS File: serving %d files, size: %s from /\n", num, formatBytes(totalSize).c_str());
 }
 
 
@@ -2425,29 +2506,29 @@ void setupWebServer(void) {
 
   server.begin();
 
-  Serial.println("HTTP server started");
+//  Serial.println("HTTP server started");
 }
 
 
 void reconnect() {
   // Loop until we're reconnected
   while (!client.connected()) {
-    Serial.print("Attempting MQTT connection...");
+//    Serial.print("Attempting MQTT connection...");
 //    // Create a random client ID
 //    String clientId = "ESP8266Client-";
 //    clientId += String(random(0xffff), HEX);
 //    // Attempt to connect
 //    if (client.connect(clientId.c_str())) {
     if (client.connect(config.host_name)) {
-      Serial.println("connected");
+//      Serial.println("connected");
       // ... and resubscribe
       char topic[30];
       sprintf(topic, "%s/command", config.host_name);
       client.subscribe(topic);
     } else {
-      Serial.print("failed, rc=");
-      Serial.print(client.state());
-      Serial.println(" try again in 5 seconds");
+//      Serial.print("failed, rc=");
+//      Serial.print(client.state());
+//      Serial.println(" try again in 5 seconds");
       // Wait 5 seconds before retrying
       delay(5000);
     }
@@ -2464,7 +2545,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   char value[12];
   memcpy(value, payload, length);
   value[length] = '\0';
-  Serial.printf("Message arrived [%s] %s\n", topic, value);
+//  Serial.printf("Message arrived [%s] %s\n", topic, value);
 
   if (strcmp(topic, "command") == 0) {
     char action = *value;
@@ -2477,11 +2558,11 @@ void callback(char* topic, byte* payload, unsigned int length) {
       modeChange(false);
     }
     else {
-      Serial.printf("Unknown action: %c\n", action);
+//      Serial.printf("Unknown action: %c\n", action);
     }
   }
   else {
-    Serial.printf("Unknown topic: %s\n", topic);
+//    Serial.printf("Unknown topic: %s\n", topic);
   }
 }
 
