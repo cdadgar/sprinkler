@@ -2077,6 +2077,12 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           config.mode = strtol(ptr, &ptr, 10);
           modeChange(false);
         }
+        else if (strncmp(ptr,"delay",5) == 0) {
+          // delay another 24 hours (timer is in minutes)
+          rainBlackoutTime += 60 * 24;
+          // update the gui
+          printRainState(true);
+        }
         else if (strncmp(ptr,"runZone",7) == 0) {
           target = "zone";
           ptr = strstr(ptr, target) + strlen(target)+3;

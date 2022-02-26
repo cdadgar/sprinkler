@@ -80,6 +80,13 @@ function initGui(){
     socket.send(JSON.stringify(json));
   });
 
+  $('#delay').button().click(function(event) {
+    var json = {
+      command: 'delay'
+    };
+    socket.send(JSON.stringify(json));
+  });
+
   $('#prog').button().click(function(event) {
    window.location.href='./program.htm';
   });
@@ -158,6 +165,7 @@ function runZone() {
   <br><br>
   <button id='manual'>Start</button>
   <button id='prog'>Program</button>
+  <button id='delay'>Delay</button>
   <br><br>
   <button id='zone'>Zone</button>
   <button id='setup'>Setup</button>
