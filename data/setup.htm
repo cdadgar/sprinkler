@@ -10,6 +10,12 @@
 #ssid {
   width: 90px;
 }
+#macid {
+  width: 90px;
+}
+#memory {
+  width: 90px;
+}
 #host_name {
   width: 90px;
 }
@@ -50,10 +56,20 @@ $(document).ready(function(){
 function message(msg){
   console.log('onmessage ' + msg.data);
   var obj = JSON.parse(msg.data);
+  
+  var mem = obj.memory / 1024 / 1024;
+  if (mem < 1) {
+    mem = (mem*1024) + ' KB';
+  }
+  else {
+    mem = mem+ ' MB';
+  }
     
   $('#date').html(obj.date);
   $('#time').html(obj.time);
   $('#ssid').html(obj.ssid);
+  $('#macid').html(obj.macid);
+  $('#memory').html(mem);
   $('#host_name').val(obj.host_name);
   $('#use_mqtt').prop('checked', obj.use_mqtt=='1');
   $('#mqtt_ip_addr').val(obj.mqtt_ip_addr);
@@ -146,6 +162,8 @@ function close() {
 <div id='controls'>
   Compiled:<br><label id='date'></label>,<label id='time'></label><br>
   SSID:<label id='ssid'></label><br>
+  MACID:<label id='macid'></label><br>
+  Memory:<label id='memory'></label><br>
   Host Name:<input id='host_name'><br>
   <input type='checkbox' id='use_mqtt'>Use MQTT<br>
   MQTT IP Address:<input id='mqtt_ip_addr'><br>

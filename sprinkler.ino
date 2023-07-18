@@ -2012,6 +2012,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         sprintf(json+strlen(json), ",\"mqtt_ip_addr\":\"%s\"", config.mqtt_ip_addr);
         sprintf(json+strlen(json), ",\"mqtt_ip_port\":\"%d\"", config.mqtt_ip_port);
         sprintf(json+strlen(json), ",\"ssid\":\"%s\"", ssid.c_str());
+        sprintf(json+strlen(json), ",\"macid\":\"%s\"", WiFi.macAddress().c_str());
+        sprintf(json+strlen(json), ",\"memory\":\"%u\"", ESP.getFlashChipRealSize());
         sprintf(json+strlen(json), ",\"timeout\":\"%d\"", config.display_timeout);
         sprintf(json+strlen(json), ",\"water_adjust\":\"%d\"", config.water_adjust);
         sprintf(json+strlen(json), ",\"use_zimmerman\":\"%d\"", config.use_zimmerman);
