@@ -21,6 +21,12 @@
  * note:  must use the profilic usb to serial to get the spiffs upload to work.  its fails with the other converter
  * if the profilic port isn't working, trying using the old version of the driver 3.3.3.114
  * 
+ * note: sketch data upload only works in arduino 1.x.x (not 2.x.x), so you must use the older version
+ *
+ *
+ * to program using dedicated esp01 programmer:
+ * insert module with antenne facing usb plug (it covers the capacitor on the programmer)
+ * press and hold button beneath programmer and insert usb (pressing enters programming mode)
  * 
  * 
  * during upload, I sometimes get a few
@@ -193,35 +199,37 @@ all the the other lines work at 3.3V
 #define MUX1_AP   0x38    // 00111000   PCF8574AP, A0, A1, and A2 to GND
 #define MUX2_AP   0x39    // 00111001   PCF8574AP, A1, and A2 to GND, A0 to VCC
 
-// the chip type config calue uses this to set the right chip
+// the chip type config value uses this to set the right chip
 // chip type is either P or AP
 #define MUX_ADD   0x18    // 00011000   add this to the address of a A chip to make it the address of a AP chip
 
 
 #ifdef OLD
-// p0 not used
-#define UP     0x40
-#define ENTER  0x20
-#define DOWN   0x10
+#define UP     0x40  // P6  MUX1
+#define ENTER  0x20  // P5  MUX1
+#define DOWN   0x10  // P4  MUX1
 
-#define ZONE1  0x04
-#define ZONE2  0x08
-#define ZONE3  0x04
-#define ZONE4  0x02
-#define ZONE5  0x01
-#define ZONE6  0x40
-#define ZONE7  0x20
-#define ZONE8  0x10
-#define ZONE9  0x01
-#define ZONE10 0x02
+#define ZONE1  0x04  // P2  MUX2
+#define ZONE2  0x08  // P3  MUX2
+#define ZONE3  0x04  // P2  MUX1
+#define ZONE4  0x02  // P1  MUX1
+#define ZONE5  0x01  // P0  MUX1
+#define ZONE6  0x40  // P6  MUX2
+#define ZONE7  0x20  // P5  MUX2
+#define ZONE8  0x10  // P4  MUX2
+#define ZONE9  0x01  // P0  MUX2
+#define ZONE10 0x02  // P1  MUX2
 
 // the rain sesnor is normally closed, and opens up when it gets wet
 #define RAIN_SENSOR_TRIGGERED HIGH
-#define rainSensorMask  0x08
+#define rainSensorMask  0x08  // P3
 #define rainSensorAddr  MUX1
 
-#define pumpMask  0x80
+#define pumpMask  0x80  // P7
 #define pumpAddr  MUX2
+
+#define transformerMask  0x80  // P7
+#define transformerAddr  MUX1
 
 byte zoneMasks[] = { ZONE1, ZONE2, ZONE3, ZONE4, ZONE5, ZONE6, ZONE7, ZONE8, ZONE9, ZONE10 };
 byte zoneAddrs[] = { MUX2,  MUX2,  MUX1,  MUX1,  MUX1,  MUX2,  MUX2,  MUX2,  MUX2,  MUX2   };
@@ -248,6 +256,9 @@ byte zoneAddrs[] = { MUX2,  MUX2,  MUX1,  MUX1,  MUX1,  MUX2,  MUX2,  MUX2,  MUX
 
 #define pumpMask  0x10  // P4
 #define pumpAddr  MUX1
+
+#define transformerMask  0x80  // P7
+#define transformerAddr  MUX2
 
 byte zoneMasks[] = { ZONE1, ZONE2, ZONE3, ZONE4, ZONE5, ZONE6, ZONE7, ZONE8, ZONE9, ZONE10 };
 byte zoneAddrs[] = { MUX1,  MUX1,  MUX1,  MUX2,  MUX2,  MUX2,  MUX2,  MUX2,  MUX2,  MUX2   };
@@ -312,6 +323,7 @@ int selectedMenuItem;
 #define RUN    1
 const char *modeNames[] = { "Off    ", "Running" };
 
+bool isTransformerOn;
 bool isPumpOn;
 bool isManual;
 bool isRain;
@@ -509,14 +521,8 @@ void setup() {
   loadZoneConfig();
   isMemoryReset = false;
 
-  if (strcmp(config.chip_type,"P") == 0) {
-    send(MUX1, 0xFF);
-    send(MUX2, 0xFF);
-  }
-  else {
-    send(MUX1+MUX_ADD, 0xFF);
-    send(MUX2+MUX_ADD, 0xFF);
-  }
+  send(MUX1, 0xFF);
+  send(MUX2, 0xFF);
 
   if (config.use_temp) {
     if (!setupTemperature()) {
@@ -535,6 +541,7 @@ void setup() {
   lastMinutes = 0;
   lastSeconds = 0;
 
+  isTransformerOn = false;
   isPumpOn = false;
   isManual = false;
   isRain = false;
@@ -1072,14 +1079,9 @@ void checkRemainingWatering(void) {
 
 
 int getRainSensor(void) {
-  if (strcmp(config.chip_type,"P") == 0)
-    Wire.requestFrom(rainSensorAddr, 1); 
-  else
-    Wire.requestFrom(rainSensorAddr+MUX_ADD, 1); 
-  
-  if (!Wire.available())
+  if (!requestFrom(rainSensorAddr))
     return HIGH;
-    
+
   byte value = Wire.read();
   int reading = ((value & rainSensorMask) == 0) ? LOW : HIGH;
   return reading;
@@ -1088,11 +1090,7 @@ int getRainSensor(void) {
 
 void checkButtons(void) {
   if (testClient != -1 && testAddr != -1) {
-    if (strcmp(config.chip_type,"P") == 0)
-      Wire.requestFrom(testAddr, 1); 
-    else
-      Wire.requestFrom(testAddr+MUX_ADD, 1); 
-    if (!Wire.available())
+    if (!requestFrom(testAddr))
       return;
     
     unsigned int heap = ESP.getFreeHeap();
@@ -1107,11 +1105,7 @@ void checkButtons(void) {
     }
   }
 
-  if (strcmp(config.chip_type,"P") == 0)
-    Wire.requestFrom(MUX1, 1); 
-  else
-    Wire.requestFrom(MUX1+MUX_ADD, 1); 
-  if (!Wire.available())
+  if (!requestFrom(MUX1))
     return;
     
   byte value = Wire.read();    
@@ -1295,11 +1289,21 @@ void drawMenuScreen(void) {
 
 void send(byte addr, byte b) {
   if (strcmp(config.chip_type,"P") == 0)
-    Wire.beginTransmission(addr);
-  else
-    Wire.beginTransmission(addr+MUX_ADD);
+    addr += MUX_ADD;
+
+  Wire.beginTransmission(addr);
   Wire.write(b);
   Wire.endTransmission(); 
+}
+
+
+boolean requestFrom(byte addr) {
+  if (strcmp(config.chip_type,"P") == 0)
+    addr += MUX_ADD;
+
+  Wire.requestFrom((uint8_t)addr, (uint8_t)1); 
+  
+  return Wire.available();
 }
 
 
@@ -1429,11 +1433,30 @@ void printTime(bool isCheckProgram, bool isDisplay, bool isTest) {
 }
 
 
+void transformer(boolean isOn) {
+  isTransformerOn = isOn;
+  byte data = 0xFF;
+  if (isOn)
+    data ^= transformerMask;
+
+  // we're always the first thing to turn on, so no need to check anything else
+
+  send(transformerAddr, data);  
+//  Serial.printf("transformer, sending addr %d, value ", transformerAddr);
+//  Serial.println(data, BIN);
+}
+
+
 void pump(boolean isOn) {
   isPumpOn = isOn;
   byte data = 0xFF;
   if (isOn)
-    data ^=  pumpMask;
+    data ^= pumpMask;
+
+  // don't turn off the transformer, if it needs to stay on
+  if (isTransformerOn && transformerAddr == pumpAddr)
+    data ^= transformerMask;
+    
   send(pumpAddr, data);  
 //  Serial.printf("pump, sending addr %d, value ", pumpAddr);
 //  Serial.println(data, BIN);
@@ -1492,6 +1515,7 @@ void stopProgram(void) {
   runningZone = -1;
   isRunningManual = false;
   pump(false);
+  transformer(false);
   clearWatering();
   isManual = false;
   printModeState(true);
@@ -1535,6 +1559,9 @@ void startCurrentZone(void) {
     lcd.print(buf);
   }
 
+  // turn on the transformer
+  transformer(true);
+
   // turn on the pump if this zone needs it, or off if it doesn't
   // must call pump before turning our zone on, since the pump call turns off any other
   // zones on its mux
@@ -1542,9 +1569,15 @@ void startCurrentZone(void) {
   
   // turn on the new zone
   byte data = 0xFF ^ zoneMasks[runningZone];
+
+  // don't turn off the transformer, if it needs to stay on
+  if (isTransformerOn && transformerAddr == zoneAddrs[runningZone])
+    data ^= transformerMask;
+
   // don't turn off the pump, if it needs to stay on
   if (isPumpOn && pumpAddr == zoneAddrs[runningZone])
     data ^= pumpMask;
+
   send(zoneAddrs[runningZone], data);
 //  Serial.printf("start zone %d, sending addr %d, value ", runningZone, zoneAddrs[runningZone]);
 //  Serial.println(data, BIN);
@@ -1566,10 +1599,17 @@ void stopCurrentZone(void) {
   // turn off the current zone
   if ( runningZone != -1 ) {
     byte data = 0xFF;
+
+    // don't turn off the transformer, if it needs to stay on
+    if (isTransformerOn && transformerAddr == zoneAddrs[runningZone])
+      data ^= transformerMask;
+
     // don't turn off the pump, if it needs to stay on
     if (isPumpOn && pumpAddr == zoneAddrs[runningZone])
       data ^= pumpMask;
+    
     send(zoneAddrs[runningZone], data);
+    
     remainingZoneMinutes = 0;
     remainingZoneSeconds = 0;
     isName = false;
