@@ -775,9 +775,10 @@ void setupTime(void) {
 
   AsyncUDP* udp = new AsyncUDP();
 
-  // time.nist.gov NTP server
   // NTP requests are to port 123
-  if (udp->connect(IPAddress(129,6,15,28), 123)) {
+  IPAddress timeServerIP;     // NTP server address
+  WiFi.hostByName("pool.ntp.org", timeServerIP);
+  if (udp->connect(timeServerIP, 123)) {
 //    Serial.println("UDP connected");
     
     udp->onPacket([](void *arg, AsyncUDPPacket packet) {
@@ -1014,7 +1015,8 @@ void checkTimeMinutes() {
   if (minutes == 0 && hour() == 3)
     isTimeSet = false;
 
-  if (!isTimeSet)
+  // resync the time every 5 minutes
+  if (!isTimeSet && minutes % 5 == 0)
     setupTime();
   
   lastMinutes = minutes;
