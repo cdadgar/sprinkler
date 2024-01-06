@@ -1,7 +1,7 @@
 /*
  * module is a esp-1  (Generic ESP8266 Module)
  * flash size set to 1MB (FS:128KB OTA:~438KB)
- * for a 4MB modified esp01 (new memory chip soldered onto it)
+ * for a 4MB modified esp01 (new memory chip soldered onto it)fmux1
  * flash size set to 4MB (FS:1MB OTA:~1019KB)
  * 
  * 
@@ -385,9 +385,8 @@ int zoneClient = -1;
 int setupClient = -1;
 int testClient = -1;
 
-int testAddr = -1;
-int testValue = -1;
-unsigned int testHeap = 0;
+int testValue1 = -1;
+int testValue2 = -1;
 
 // temperature
 #define ONE_WIRE_BUS 3  // RX
@@ -935,9 +934,11 @@ void loop(void)
   unsigned long time = millis();
 
   if (screen == MAIN) {
-    // turn off the display if idle
-    if (time - lastButtonPressTime > (config.display_timeout*1000) ) {
-      displayBacklight(false);
+    if (isDisplayOn) {
+      // turn off the display if idle
+      if (time - lastButtonPressTime > (config.display_timeout*1000) ) {
+        displayBacklight(false);
+      }
     }
 
     checkTimeMinutes();
@@ -1091,20 +1092,24 @@ int getRainSensor(void) {
 
 
 void checkButtons(void) {
-  if (testClient != -1 && testAddr != -1) {
-    if (!requestFrom(testAddr))
-      return;
+  if (testClient != -1) {
+    requestFrom(MUX1);
+    while (!Wire.available()) {
+      delay(1); 
+    }
+    testValue1 = Wire.read();
+    
+    requestFrom(MUX2);
+    while (!Wire.available()) {
+      delay(1); 
+    }
+    testValue2 = Wire.read();
     
     unsigned int heap = ESP.getFreeHeap();
-    byte value = Wire.read();
-    if (value != testValue || heap != testHeap) {
-      testValue = value;
-      testHeap = heap;
-      char json[128];
-      sprintf(json, "{\"command\":\"read\",\"value\":\"%d\",\"heap\":\"%u\"}", value, heap);
-//      Serial.printf("sending %s\n", json);
-      webSocket.sendTXT(testClient, json, strlen(json));
-    }
+    char json[128];
+    sprintf(json, "{\"command\":\"read\",\"mux1_val\":\"%d\",\"mux2_val\":\"%d\",\"heap\":\"%u\"}", testValue1, testValue2, heap);
+//    Serial.printf("sending %s\n", json);
+    webSocket.sendTXT(testClient, json, strlen(json));
   }
 
   if (!requestFrom(MUX1))
@@ -1992,9 +1997,8 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
         zoneClient = -1;
       else if (num == testClient) {
         testClient = -1;
-        testAddr = -1;
-        testValue = -1;
-        testHeap = 0;
+        testValue1 = -1;
+        testValue2 = -1;
       }
       break;
     case WStype_CONNECTED:
@@ -2071,13 +2075,12 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
       }
       else if (strcmp((char *)payload,"/test") == 0) {
         testClient = num;
-        testAddr = MUX1;
 
         // send the addessses of the muxes we are using
         // send the display state
         char json[128];
-        sprintf(json, "{\"msg\":\"MUXes at %d and %d\",\"addr\":\"%d\",\"display\":\"%d\"}",
-          MUX1, MUX2, MUX1, ((isDisplayOn) ? 1 : 0));
+        sprintf(json, "{\"mux1_addr\":\"%d\",\"mux2_addr\":\"%d\",\"display\":\"%d\"}",
+          MUX1, MUX2, ((isDisplayOn) ? 1 : 0));
 //        Serial.printf("len %d\n", strlen(json));
         webSocket.sendTXT(testClient, json, strlen(json));
       }
@@ -2279,7 +2282,6 @@ void webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lenght
           int value = strtol(ptr, &ptr, 10);
 //          Serial.printf("mux %d %d\n", addr, value);
           send(addr, value);
-          testAddr = addr;
         }
         else if (strncmp(ptr,"display",6) == 0) {
           target = "value";

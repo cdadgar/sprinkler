@@ -17,15 +17,24 @@ $(document).ready(function(){
 function message(msg){
   console.log('onmessage ' + msg.data);
   var obj = JSON.parse(msg.data);
-  if (obj.command == 'display')
+  if (obj.command === undefined) {
+    $('#addr').val(obj.mux1_addr);
+    $('#mux1_addr').html(obj.mux1_addr);
+    $('#mux2_addr').html(obj.mux2_addr);
+    $('#display' + obj.display).prop('checked', true).button('refresh');
+  }  
+  else if (obj.command === 'display') {
     $('#' + obj.command + obj.value).prop('checked', true).button('refresh');
-  else if (obj.msg != undefined) {
-    $('#msg').html(obj.msg);
-    $('#addr').val(obj.addr);
   }
-  else {
-    $('#val').html(obj.value + "&nbsp;&nbsp;&nbsp;" + parseInt(obj.value).toString(2));
+  else if (obj.command === 'read') {
+    $('#mux1_val').html(obj.mux1_val);
+	$('#mux1_val2').html(parseInt(obj.mux1_val).toString(2));
+    $('#mux2_val').html(obj.mux2_val);
+	$('#mux2_val2').html(parseInt(obj.mux2_val).toString(2));
 	$('#heap').html(obj.heap);
+  }
+  else if (obj.command === 'msg') {
+    $('#msg').html(obj.msg);
   }
 }
 
@@ -65,15 +74,31 @@ function initGui(){
 <div id='message' style='zoom:200%;'></div>
 <div id='controls'>
   <span id='msg' class='ui-widget'></span><br>
-  <label for='addr'>Addr:</label>&nbsp;
-  <input name='addr' id='addr'>
+  <label class='ui-widget' style='width: 65px; display: inline-block;' for='addr'>Addr:</label>&nbsp;
+  <input class='ui-widget' name='addr' id='addr'>
   <br>
-  <label for='value'>Value:</label>&nbsp;
-  <input name='value' id='value'>
+  <label class='ui-widget' style='width: 65px; display: inline-block;' for='value'>Value:</label>&nbsp;
+  <input class='ui-widget' name='value' id='value'>
   <br>
-  <span id='val' class='ui-widget'></span><br>
+  <table class='ui-widget'>
+    <tr>
+	  <th>Addr</th>
+	  <th>Value</th>
+	  <th>Binary</th>
+	</tr>
+    <tr>
+	  <td id='mux1_addr'></td>
+	  <td id='mux1_val'></td>
+	  <td id='mux1_val2'></td>
+	</tr>
+    <tr>
+	  <td id='mux2_addr'></td>
+	  <td id='mux2_val'></td>
+	  <td id='mux2_val2'></td>
+	</tr>
+  </table>
   <br>
-  <label for='heap'>Free Heap:</label>&nbsp;
+  <label for='heap' class='ui-widget'>Free Heap:</label>&nbsp;
   <span id='heap' class='ui-widget'></span><br><br>
   <div id='display'>
     <label for='display' class='ui-widget'>Display:</label>
