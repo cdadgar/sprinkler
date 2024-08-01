@@ -739,6 +739,10 @@ void checkTemperature(void) {
 
 bool setupWifi(void) {
   WiFi.hostname(config.host_name);
+
+  WiFi.persistent(true);
+  WiFi.setAutoConnect(true);
+  WiFi.setAutoReconnect(true);
   
 //  wifiManager.setDebugOutput(false);
   
@@ -754,15 +758,18 @@ bool setupWifi(void) {
     lcd.setCursor(0,1);
     lcd.print(ssid);
   }
+
+  wifiManager.setTimeout(120);
+  wifiManager.setConfigPortalTimeout(120);
   
   //set callback that gets called when connecting to previous WiFi fails, and enters Access Point mode
   wifiManager.setAPCallback(configModeCallback);
 
   if(!wifiManager.autoConnect(config.host_name)) {
     Serial.println(F("failed to connect and hit timeout"));
-    //reset and try again, or maybe put it to deep sleep
-    ESP.reset();
-    delay(1000);
+    //restart and try again
+    delay(100);
+    ESP.restart();
   } 
 
   return true;
